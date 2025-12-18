@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2 } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, CloudUpload } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 // --- 常數設定 ---
@@ -88,11 +88,8 @@ export default function SubstitutionApp() {
           }
         } catch (error) {
           console.error("雲端讀取失敗:", error);
-          // 若讀取失敗 (如權限不足)，暫時不啟用雲端，避免卡住
+          // 若讀取失敗 (如權限不足)，暫時不啟用雲端
           setIsCloudEnabled(false);
-          if (error.code === 'permission-denied') {
-            alert("⚠️ 無法讀取雲端資料庫：權限不足。\n請檢查 Firebase Console > Firestore Database > Rules 是否已設為 true。");
-          }
         }
       }
 
@@ -128,7 +125,7 @@ export default function SubstitutionApp() {
     initData();
   }, []);
 
-  // --- 自動儲存機制 (含強制錯誤提示) ---
+  // --- 自動儲存機制 ---
   useEffect(() => {
     if (isLoading) return;
 
@@ -140,9 +137,8 @@ export default function SubstitutionApp() {
     localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(logs));
     localStorage.setItem(STORAGE_KEY_TIMESTAMP, isoTime);
 
-    // 2. 存雲端
+    // 2. 存雲端 (僅當雲端已啟用時)
     const saveDataToCloud = async () => {
-      // 只有在「確實有連上 Firebase」且「啟用雲端」時才存
       if (dbRef.current && isCloudEnabled) {
         setSaveStatus('saving');
         try {
@@ -157,10 +153,6 @@ export default function SubstitutionApp() {
         } catch (e) {
           console.error("雲端儲存失敗:", e);
           setSaveStatus('error');
-          // 如果是因為權限問題，跳一次 Alert 提醒用戶
-          if (e.code === 'permission-denied') {
-             alert("⚠️ 雲端儲存失敗：權限被拒。\n請到 Firebase Console 修改規則 (Rules) 為 true。");
-          }
         }
       }
     };
@@ -169,6 +161,44 @@ export default function SubstitutionApp() {
     return () => clearTimeout(timer);
 
   }, [teachers, logs, isCloudEnabled, isLoading]);
+
+  // --- 手動強制上傳雲端 (新增功能) ---
+  const handleManualCloudUpload = async () => {
+    if (!dbRef.current) {
+      alert("❌ 錯誤：尚未偵測到 Firebase 資料庫連線。\n請檢查 src/firebaseConfig.js 設定檔是否正確。");
+      return;
+    }
+
+    const now = new Date();
+    const isoTime = now.toISOString();
+    setSaveStatus('saving');
+
+    try {
+      await setDoc(doc(dbRef.current, "school_data", "main_backup"), {
+        teachers: teachers,
+        logs: logs,
+        lastUpdated: isoTime
+      });
+      setLastSaved(now);
+      setSaveStatus('saved');
+      setIsCloudEnabled(true); // 強制設為已啟用
+      alert("✅ 上傳成功！\n\n資料已成功寫入 Firebase 資料庫。\n現在其他裝置開啟網頁時，將會同步此份資料。");
+    } catch (e) {
+      console.error("手動上傳失敗:", e);
+      setSaveStatus('error');
+      
+      let errorMsg = "未知錯誤";
+      if (e.code === 'permission-denied') {
+        errorMsg = "權限不足 (Permission Denied)。\n請到 Firebase Console -> Firestore Database -> Rules，將規則改為 true。";
+      } else if (e.code === 'unavailable') {
+        errorMsg = "網路連線問題，無法連接到 Firebase 伺服器。";
+      } else {
+        errorMsg = e.message;
+      }
+      
+      alert(`❌ 上傳失敗\n\n原因：${errorMsg}`);
+    }
+  };
 
   // --- 日期變更處理 ---
   useEffect(() => {
@@ -353,7 +383,7 @@ export default function SubstitutionApp() {
           });
         }
         setTeachers(newTeachers); 
-        showAlert("匯入成功", `已處理 ${count} 筆資料。`);
+        showAlert("匯入成功", `已處理 ${count} 筆資料。請點擊「手動上傳雲端」以確保保存。`);
       } catch (err) { showAlert("錯誤", "格式有誤"); }
       e.target.value = '';
     };
@@ -524,9 +554,17 @@ export default function SubstitutionApp() {
     <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4 animate-in fade-in zoom-in duration-300">
       <div className="flex flex-wrap justify-between items-center gap-2">
         <h2 className="text-xl font-bold text-purple-800 flex items-center"><UserCheck className="mr-2"/> 教師設定</h2>
-        <div className="flex gap-2">
+        
+        {/* 新增功能按鈕區 */}
+        <div className="flex gap-2 items-center">
           <button onClick={downloadTimetableTemplate} className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm border border-purple-200 hover:bg-purple-100"><Download size={14} className="inline mr-1"/>範本</button>
           <button onClick={() => timetableImportRef.current.click()} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm shadow hover:bg-purple-700"><FileText size={14} className="inline mr-1"/>匯入課表</button>
+          
+          {/* 強制上傳按鈕 */}
+          <button onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center">
+            <CloudUpload size={14} className="mr-1"/> 手動上傳雲端
+          </button>
+          
           <input type="file" ref={timetableImportRef} onChange={e => handleCSVImport(e, 'timetable')} className="hidden" />
         </div>
       </div>
@@ -609,7 +647,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V2</div>
              
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
