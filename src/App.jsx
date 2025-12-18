@@ -7,11 +7,9 @@ import { doc, getDoc, setDoc } from "firebase/firestore";
 const TOTAL_PERIODS = 9;
 const PERIODS = Array.from({ length: TOTAL_PERIODS }, (_, i) => i + 1);
 const CORE_SUBJECTS = ['中文', '英文', '數學', 'CHI', 'ENG', 'MATH', 'CHINESE', 'ENGLISH', 'MATHEMATICS'];
-
-// 1. 修改儲存 Key 回到 V2，以讀取舊資料
-const STORAGE_KEY_TEACHERS = 'substitution_system_teachers_data_v2';
-const STORAGE_KEY_LOGS = 'substitution_system_logs_data_v2';
-const STORAGE_KEY_TIMESTAMP = 'substitution_system_last_updated_v2';
+const STORAGE_KEY_TEACHERS = 'substitution_system_teachers_data_v3';
+const STORAGE_KEY_LOGS = 'substitution_system_logs_data_v3';
+const STORAGE_KEY_TIMESTAMP = 'substitution_system_last_updated_v3';
 
 export default function SubstitutionApp() {
   // --- 狀態管理 ---
@@ -22,10 +20,7 @@ export default function SubstitutionApp() {
   const [lastSaved, setLastSaved] = useState(null);
   const [saveStatus, setSaveStatus] = useState('idle');
 
-  // 拖曳狀態
   const [draggedLogId, setDraggedLogId] = useState(null);
-
-  // 用 useRef 來儲存資料庫連線實例
   const dbRef = useRef(null);
 
   // 介面狀態
@@ -42,27 +37,24 @@ export default function SubstitutionApp() {
 
   const [modal, setModal] = useState({ isOpen: false, type: 'info', title: '', message: '', onConfirm: null });
 
-  // --- 初始化與資料讀取 ---
+  // --- 初始化 ---
   useEffect(() => {
     const initData = async () => {
       setIsLoading(true);
       let loadedFromCloud = false;
 
-      // 1. 嘗試動態載入 Firebase
       try {
         const fb = await import('./firebaseConfig');
         if (fb && fb.db) {
           dbRef.current = fb.db;
         }
       } catch (e) {
-        console.log("提示: 尚未設定 firebaseConfig.js，本機模式。");
+        console.log("提示: 本機模式 (無 Firebase 設定)");
       }
 
-      // 2. 嘗試從雲端讀取
       if (dbRef.current) {
         try {
-          // 2. 修改雲端路徑回到 main_backup (V2 路徑)
-          const docRef = doc(dbRef.current, "school_data", "main_backup");
+          const docRef = doc(dbRef.current, "school_data", "main_backup_v3");
           const docSnap = await getDoc(docRef);
           
           if (docSnap.exists()) {
@@ -74,7 +66,7 @@ export default function SubstitutionApp() {
             loadedFromCloud = true;
             setIsCloudEnabled(true); 
           } else {
-            console.log("雲端無資料，嘗試初始化。");
+            console.log("雲端無 V3 資料，嘗試初始化。");
             setIsCloudEnabled(true); 
           }
         } catch (error) {
@@ -83,10 +75,14 @@ export default function SubstitutionApp() {
         }
       }
 
-      // 3. 讀取 LocalStorage
       if (!loadedFromCloud) {
-        const localTeachers = localStorage.getItem(STORAGE_KEY_TEACHERS);
-        const localLogs = localStorage.getItem(STORAGE_KEY_LOGS);
+        let localTeachers = localStorage.getItem(STORAGE_KEY_TEACHERS);
+        let localLogs = localStorage.getItem(STORAGE_KEY_LOGS);
+        
+        if (!localTeachers) {
+             localTeachers = localStorage.getItem('substitution_system_teachers_data_v2');
+             localLogs = localStorage.getItem('substitution_system_logs_data_v2');
+        }
 
         if (localTeachers) {
           try {
@@ -111,7 +107,7 @@ export default function SubstitutionApp() {
     initData();
   }, []);
 
-  // --- 自動儲存機制 ---
+  // --- 自動儲存 ---
   useEffect(() => {
     if (isLoading) return;
 
@@ -121,8 +117,7 @@ export default function SubstitutionApp() {
     const timer = setTimeout(async () => {
       if (isCloudEnabled && dbRef.current) {
         try {
-          // 3. 修改雲端儲存路徑回到 main_backup
-          await setDoc(doc(dbRef.current, "school_data", "main_backup"), {
+          await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
             teachers: teachers,
             logs: logs,
             lastUpdated: new Date().toISOString()
@@ -137,7 +132,7 @@ export default function SubstitutionApp() {
     return () => clearTimeout(timer);
   }, [teachers, logs, isCloudEnabled, isLoading]);
 
-  // --- 手動強制上傳 ---
+  // --- 手動上傳 ---
   const handleManualCloudUpload = async () => {
     if (!dbRef.current) {
       alert("❌ 錯誤：尚未偵測到 Firebase 資料庫連線。");
@@ -146,8 +141,7 @@ export default function SubstitutionApp() {
     const now = new Date();
     setSaveStatus('saving');
     try {
-      // 4. 修改手動上傳路徑回到 main_backup
-      await setDoc(doc(dbRef.current, "school_data", "main_backup"), {
+      await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
         teachers: teachers,
         logs: logs,
         lastUpdated: now.toISOString()
@@ -155,14 +149,14 @@ export default function SubstitutionApp() {
       setLastSaved(now);
       setSaveStatus('saved');
       setIsCloudEnabled(true);
-      alert("✅ 資料上傳成功！(已同步至 V2 資料庫)");
+      alert("✅ V3 資料上傳成功！");
     } catch (e) {
       setSaveStatus('error');
       alert(`❌ 上傳失敗: ${e.message}`);
     }
   };
 
-  // --- 日期變更與重算 ---
+  // --- 日期變更 ---
   useEffect(() => {
     if (!formDate) return;
     const dayOfWeek = new Date(formDate).getDay(); 
@@ -217,7 +211,7 @@ export default function SubstitutionApp() {
   };
 
   const handleSubstitutionClick = (subTeacherId, isExtracting) => {
-    if (!absentTeacherId || !selectedPeriod || !className) return showAlert("資料不完整", "請填寫完整資訊");
+    if (!absentTeacherId || !selectedPeriod || !className) return showAlert("資料不完整", "請填寫完整資訊 (包含班別)");
     const subT = teachers.find(t => t.id == subTeacherId);
     const absT = teachers.find(t => t.id == absentTeacherId);
     if (!subT || !absT) return showAlert("錯誤", "找不到老師資料");
@@ -245,25 +239,47 @@ export default function SubstitutionApp() {
     });
   };
 
+  // --- 刪除紀錄並還原統計 (修正版) ---
   const deleteLog = (logId) => {
     const log = logs.find(l => l.id === logId);
     if (!log) return;
-    showConfirm("確認刪除", "確定刪除此紀錄？相關統計將自動回滾。", () => {
+    
+    showConfirm("確認刪除", "確定刪除此紀錄？\n\n系統將會自動：\n1. 扣減代課老師的「代課數」\n2. 扣減缺席老師的「缺課數」 (還原統計)", () => {
       setTeachers(prev => prev.map(t => {
         let changes = {};
-        if ((log.absentId && t.id == log.absentId) || (!log.absentId && t.name === log.absentName)) changes.absences = Math.max(0, (t.absences || 0) - 1);
-        if ((log.subId && t.id == log.subId) || (!log.subId && t.name === log.subName)) changes.substitutions = Math.max(0, (t.substitutions || 0) - 1);
-        return Object.keys(changes).length ? { ...t, ...changes } : t;
+        // 1. 還原缺課老師的缺課數
+        // 使用 == 進行 ID 寬鬆比對 (字串/數字)
+        if ((log.absentId && t.id == log.absentId) || (!log.absentId && t.name === log.absentName)) {
+            changes.absences = Math.max(0, (t.absences || 0) - 1);
+        }
+        
+        // 2. 還原代課老師的代課數
+        // 假如該紀錄曾經被 DragSwap 過，subId 會是最後那位代課老師的 ID，這是正確的
+        if ((log.subId && t.id == log.subId) || (!log.subId && t.name === log.subName)) {
+            changes.substitutions = Math.max(0, (t.substitutions || 0) - 1);
+        }
+        
+        return Object.keys(changes).length > 0 ? { ...t, ...changes } : t;
       }));
+      
       setLogs(prev => prev.filter(l => l.id !== logId));
       closeModal();
     });
   };
 
-  // --- Drag and Drop Logic (V3 Feature kept) ---
+  // --- Drag and Drop (修正點擊問題) ---
   const handleDragStart = (e, logId) => {
-    setDraggedLogId(logId);
+    // 關鍵修正：使用 setTimeout 延遲 State 更新，避免 React 重新渲染導致瀏覽器拖曳行為中斷
+    setTimeout(() => {
+        setDraggedLogId(logId);
+    }, 0);
+    
     e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", logId); // 設置資料協助相容性
+  };
+
+  const handleDragEnd = () => {
+    setDraggedLogId(null);
   };
 
   const handleDragOver = (e) => {
@@ -281,12 +297,9 @@ export default function SubstitutionApp() {
     if (!sourceLog || !targetLog) return;
 
     const newLogs = logs.map(l => {
-      if (l.id === draggedLogId) {
-        return { ...l, subName: targetLog.subName, subId: targetLog.subId };
-      }
-      if (l.id === targetLogId) {
-        return { ...l, subName: sourceLog.subName, subId: sourceLog.subId };
-      }
+      // 僅交換代課老師資訊 (Sub Info)，不交換缺課者、班級、節次
+      if (l.id === draggedLogId) return { ...l, subName: targetLog.subName, subId: targetLog.subId };
+      if (l.id === targetLogId) return { ...l, subName: sourceLog.subName, subId: sourceLog.subId };
       return l;
     });
 
@@ -294,7 +307,6 @@ export default function SubstitutionApp() {
     setDraggedLogId(null);
   };
 
-  // --- 核心搜尋演算法 ---
   const getAvailableTeachers = () => {
     if (!selectedPeriod || !absentTeacherId) return [];
     const p = parseInt(selectedPeriod);
@@ -311,14 +323,6 @@ export default function SubstitutionApp() {
       })
       .filter(t => {
         if (t.id == absentTeacherId) return false;
-        
-        // --- 檢查是否已代課 ---
-        if (t.subbedPeriods.includes(p)) return false;
-
-        // --- 檢查是否也是缺席者 ---
-        const isAbsentThisPeriod = dailyLogs.some(l => l.period === p && l.absentId == t.id);
-        if (isAbsentThisPeriod) return false;
-
         const isFree = t.actualFreePeriods.includes(p);
         const isSupport = t.scheduleDetails?.[targetKey]?.isSupport === true;
         return isFree || isSupport;
@@ -430,8 +434,9 @@ export default function SubstitutionApp() {
     reader.readAsText(file);
   };
 
-  // --- Views ---
-  const Modal = () => {
+  // --- Render Functions (避免 Focus Loss) ---
+  
+  const renderModal = () => {
     if (!modal.isOpen) return null;
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
@@ -459,16 +464,7 @@ export default function SubstitutionApp() {
     );
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
-        <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V2)...</h2>
-      </div>
-    );
-  }
-
-  const ArrangeView = () => {
+  const renderArrangeView = () => {
     const list = getAvailableTeachers();
     const day = new Date(formDate).getDay();
     let absentPeriods = [], allCovered = false;
@@ -559,7 +555,7 @@ export default function SubstitutionApp() {
     );
   };
 
-  const TeachersView = () => (
+  const renderTeachersView = () => (
     <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4 animate-in fade-in zoom-in duration-300">
       <div className="flex flex-wrap justify-between items-center gap-2">
         <h2 className="text-xl font-bold text-purple-800 flex items-center"><UserCheck className="mr-2"/> 教師設定</h2>
@@ -586,7 +582,7 @@ export default function SubstitutionApp() {
     </div>
   );
 
-  const StatsView = () => (
+  const renderStatsView = () => (
     <div className="space-y-6 animate-in fade-in zoom-in duration-300">
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100">
         <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
@@ -618,7 +614,7 @@ export default function SubstitutionApp() {
     </div>
   );
 
-  const ReportView = () => {
+  const renderReportView = () => {
     const dailyLogs = logs.filter(l => l.date === formDate);
     
     // 1. 獲取當日所有「缺席老師」
@@ -628,7 +624,6 @@ export default function SubstitutionApp() {
       return { id, name: log.absentName };
     }).sort((a, b) => a.name.localeCompare(b.name, "zh-HK"));
 
-    // 2. 獲取每個格子的代課資料
     const getCellData = (period, absentId) => {
       return dailyLogs.find(l => l.period === period && l.absentId === absentId);
     };
@@ -636,7 +631,7 @@ export default function SubstitutionApp() {
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌</h2>
+          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3)</h2>
           <div className="flex items-center gap-2">
             <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 flex items-center">
               <GripHorizontal size={12} className="mr-1"/> 可拖曳互換代課
@@ -683,14 +678,14 @@ export default function SubstitutionApp() {
                         >
                           {log ? (
                             <div 
-                              className="bg-white border border-purple-200 rounded-lg p-2 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md hover:border-purple-400 group"
+                              className="bg-white border border-purple-200 rounded-lg p-2 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md hover:border-purple-400 group select-none"
                               draggable
                               onDragStart={(e) => handleDragStart(e, log.id)}
+                              onDragEnd={handleDragEnd}
                             >
                               <div className="font-bold text-fuchsia-600 text-base mb-1">{log.subName}</div>
                               <div className="text-xs text-gray-500 bg-gray-100 px-1 rounded inline-block">{log.className}</div>
                               
-                              {/* 刪除按鈕 (Hover 顯示) */}
                               <button 
                                 onClick={(e) => { e.stopPropagation(); deleteLog(log.id); }}
                                 className="absolute -top-1 -right-1 bg-red-100 text-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 hover:bg-red-200 transition-opacity shadow-sm"
@@ -715,14 +710,22 @@ export default function SubstitutionApp() {
     );
   };
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
+        <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3)...</h2>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-fuchsia-50 font-sans text-gray-800 pb-10 selection:bg-fuchsia-200">
-      <Modal />
+      {renderModal()}
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             {/* 標題改為 V2 */}
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V2</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
@@ -745,10 +748,10 @@ export default function SubstitutionApp() {
         </div>
       </nav>
       <main className="max-w-4xl mx-auto p-4 py-6">
-        {currentView==='arrange' && <ArrangeView/>}
-        {currentView==='teachers' && <TeachersView/>}
-        {currentView==='stats' && <StatsView/>}
-        {currentView==='report' && <ReportView/>}
+        {currentView==='arrange' && renderArrangeView()}
+        {currentView==='teachers' && renderTeachersView()}
+        {currentView==='stats' && renderStatsView()}
+        {currentView==='report' && renderReportView()}
       </main>
     </div>
   );
