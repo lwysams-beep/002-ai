@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, GripHorizontal } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, GripHorizontal, FileWarning } from 'lucide-react';
 // 注意：即使沒有設定 firebaseConfig.js，保留這行 import 通常不會報錯
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
@@ -21,7 +21,7 @@ export default function SubstitutionApp() {
   const [saveStatus, setSaveStatus] = useState('idle');
 
   const [draggedLogId, setDraggedLogId] = useState(null);
-  const [dragOverLogId, setDragOverLogId] = useState(null); // 新增：用於顯示 Drop 目標樣式
+  const [dragOverLogId, setDragOverLogId] = useState(null); 
   const dbRef = useRef(null);
 
   // 介面狀態
@@ -216,57 +216,73 @@ export default function SubstitutionApp() {
     const absT = teachers.find(t => t.id == absentTeacherId);
     if (!subT || !absT) return showAlert("錯誤", "找不到老師資料");
 
+    // 1. 計算自動備註 (Auto Note)
+    let note = '';
+    if (isExtracting) {
+        const p = parseInt(selectedPeriod);
+        const dayOfWeek = new Date(formDate).getDay();
+        // 查找該代課老師原本的支援課堂
+        const detail = subT?.scheduleDetails?.[`${dayOfWeek}-${p}`];
+        if (detail?.className) {
+            note = `(${detail.className}不抽離)`;
+        } else {
+            note = `(支援課堂不抽離)`;
+        }
+    }
+
     const msg = (
       <div className="text-left text-sm space-y-1">
         <p><strong>日期:</strong> {formDate} (第 {selectedPeriod} 節)</p>
         <p><strong>班級:</strong> {className}</p>
         <p className="text-red-500"><strong>缺席:</strong> {absT.name}</p>
         <p className="text-purple-600"><strong>代課:</strong> {subT.name}</p>
-        {isExtracting && <p className="text-orange-500 font-bold text-xs mt-2">⚠️ 將從原支援班級抽離</p>}
+        {note && <p className="text-orange-600 font-bold text-xs mt-2">ℹ️ 備註：{note}</p>}
+        {isExtracting && !note && <p className="text-orange-500 font-bold text-xs mt-2">⚠️ 將從原支援班級抽離</p>}
       </div>
     );
 
     showConfirm("確認安排", msg, () => {
-      // 1. 更新資料庫與日誌
+      // 更新統計
       setTeachers(prev => prev.map(t => {
         if (t.id == absentTeacherId) return { ...t, absences: (t.absences || 0) + 1 };
         if (t.id == subTeacherId) return { ...t, substitutions: (t.substitutions || 0) + 1 };
         return t;
       }));
       
-      const newLogs = [{ id: Date.now(), date: formDate, period: parseInt(selectedPeriod), className, absentName: absT.name, absentId: absT.id, subName: subT.name, subId: subT.id, timestamp: new Date().toLocaleString() }, ...logs];
+      const newLogs = [{ 
+          id: Date.now(), 
+          date: formDate, 
+          period: parseInt(selectedPeriod), 
+          className, 
+          absentName: absT.name, 
+          absentId: absT.id, 
+          subName: subT.name, 
+          subId: subT.id, 
+          note: note, // 寫入備註
+          timestamp: new Date().toLocaleString() 
+      }, ...logs];
       setLogs(newLogs);
       
       closeModal();
       
-      // 2. 自動尋找該缺席老師的「下一節」缺課 (Smart Next)
+      // Smart Next Logic
       const dayOfWeek = new Date(formDate).getDay();
       const dailySchedule = absT.masterSchedule?.[dayOfWeek] || [];
-      
-      // 找出該師當天所有「已處理」的節次 (包含剛剛那一筆)
       const coveredPeriods = newLogs
         .filter(l => l.date === formDate && l.absentId == absentTeacherId)
         .map(l => l.period);
-      
-      // 找出還沒處理的節次
       const remainingPeriods = dailySchedule
         .filter(p => !coveredPeriods.includes(p))
         .sort((a,b) => a-b);
-      
-      const nextPeriod = remainingPeriods[0]; // 取第一個未處理的
+      const nextPeriod = remainingPeriods[0];
 
       if (nextPeriod) {
-        // 自動跳轉到下一節
         setSelectedPeriod(nextPeriod);
         const detail = absT.scheduleDetails?.[`${dayOfWeek}-${nextPeriod}`];
         setClassName(detail?.className || '');
-        // 顯示輕微提示
         setTimeout(() => showAlert("已安排", `已自動跳至 ${absT.name} 的下一節缺課 (第 ${nextPeriod} 節)`), 100);
       } else {
-        // 如果都排完了，清空
-        setClassName(''); 
-        setAbsentTeacherId(''); 
-        setSelectedPeriod('');
+        setClassName(''); setAbsentTeacherId(''); setSelectedPeriod('');
         setTimeout(() => showAlert("成功", "該老師今日課堂已全部安排完成！"), 100);
       }
     });
@@ -295,12 +311,12 @@ export default function SubstitutionApp() {
 
   // --- Drag and Drop (Fix: Click once to drag) ---
   const handleDragStart = (e, logId) => {
-    // 立即設定，不使用 setTimeout，但確保樣式不會導致重繪干擾
-    setDraggedLogId(logId);
+    // 延遲更新 State，確保瀏覽器有時間建立 Drag Snapshot
+    setTimeout(() => {
+        setDraggedLogId(logId);
+    }, 0);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", logId);
-    // 建立一個透明的拖曳影像，避免預設影像擋住視線 (可選)
-    // const img = new Image(); img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; e.dataTransfer.setDragImage(img, 0, 0);
   };
 
   const handleDragEnd = () => {
@@ -327,8 +343,24 @@ export default function SubstitutionApp() {
     if (!sourceLog || !targetLog) return;
 
     const newLogs = logs.map(l => {
-      if (l.id === draggedLogId) return { ...l, subName: targetLog.subName, subId: targetLog.subId };
-      if (l.id === targetLogId) return { ...l, subName: sourceLog.subName, subId: sourceLog.subId };
+      // 僅交換代課老師 (subName, subId) 與 備註 (note)
+      // 缺席老師 (absentName)、班級 (className)、節次 (period) 保持不變 (坑不變)
+      if (l.id === draggedLogId) {
+          return { 
+              ...l, 
+              subName: targetLog.subName, 
+              subId: targetLog.subId,
+              note: targetLog.note // 交換備註
+          };
+      }
+      if (l.id === targetLogId) {
+          return { 
+              ...l, 
+              subName: sourceLog.subName, 
+              subId: sourceLog.subId,
+              note: sourceLog.note // 交換備註
+          };
+      }
       return l;
     });
 
@@ -353,17 +385,13 @@ export default function SubstitutionApp() {
         return { ...t, actualFreePeriods, subbedPeriods };
       })
       .filter(t => {
-        if (t.id == absentTeacherId) return false; // 排除自己
+        if (t.id == absentTeacherId) return false; 
         
         // --- 修正分身問題 ---
-        // 如果該老師在這一節已經有代課任務 (在 subbedPeriods 裡)，絕對不能再選
         if (t.subbedPeriods.includes(p)) return false;
 
-        // 條件：有空堂 OR 是支援老師
         const isFree = t.actualFreePeriods.includes(p);
         const isSupport = t.scheduleDetails?.[targetKey]?.isSupport === true;
-        
-        // 即使是支援老師，如果已經被抓去代別班了 (subbedPeriods check above)，這裡就不會顯示
         return isFree || isSupport;
       })
       .map(t => {
@@ -734,7 +762,12 @@ export default function SubstitutionApp() {
                               onDragEnd={handleDragEnd}
                             >
                               <div className="font-bold text-fuchsia-600 text-base mb-1">{log.subName}</div>
-                              <div className="text-xs text-gray-500 bg-gray-100 px-1 rounded inline-block">{log.className}</div>
+                              <div className="text-xs text-gray-500 bg-gray-100 px-1 rounded inline-block mb-1">{log.className}</div>
+                              {log.note && (
+                                <div className="text-[10px] text-red-500 font-bold bg-red-50 px-1 rounded border border-red-100 flex items-center justify-center">
+                                  <FileWarning size={10} className="mr-1"/> {log.note}
+                                </div>
+                              )}
                               
                               <button 
                                 onClick={(e) => { e.stopPropagation(); deleteLog(log.id); }}
