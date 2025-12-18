@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2 } from 'lucide-react';
-// 注意：即使沒有設定 firebaseConfig.js，保留這行 import 通常不會報錯，只要沒用到裡面的函數
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, GripHorizontal } from 'lucide-react';
+// 注意：即使沒有設定 firebaseConfig.js，保留這行 import 通常不會報錯
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 // --- 常數設定 ---
 const TOTAL_PERIODS = 9;
 const PERIODS = Array.from({ length: TOTAL_PERIODS }, (_, i) => i + 1);
 const CORE_SUBJECTS = ['中文', '英文', '數學', 'CHI', 'ENG', 'MATH', 'CHINESE', 'ENGLISH', 'MATHEMATICS'];
-const STORAGE_KEY_TEACHERS = 'substitution_system_teachers_data_v2';
-const STORAGE_KEY_LOGS = 'substitution_system_logs_data_v2';
-const STORAGE_KEY_TIMESTAMP = 'substitution_system_last_updated_v2';
+const STORAGE_KEY_TEACHERS = 'substitution_system_teachers_data_v3'; // 升級 Storage Key 避免衝突
+const STORAGE_KEY_LOGS = 'substitution_system_logs_data_v3';
+const STORAGE_KEY_TIMESTAMP = 'substitution_system_last_updated_v3';
 
 export default function SubstitutionApp() {
   // --- 狀態管理 ---
@@ -19,6 +19,9 @@ export default function SubstitutionApp() {
   const [isLoading, setIsLoading] = useState(true);
   const [lastSaved, setLastSaved] = useState(null);
   const [saveStatus, setSaveStatus] = useState('idle');
+
+  // 拖曳狀態
+  const [draggedLogId, setDraggedLogId] = useState(null);
 
   // 用 useRef 來儲存資料庫連線實例
   const dbRef = useRef(null);
@@ -43,54 +46,57 @@ export default function SubstitutionApp() {
       setIsLoading(true);
       let loadedFromCloud = false;
 
-      // 1. 嘗試動態載入 Firebase 設定 (移至 useEffect 內部，避免 Top-level await 錯誤)
+      // 1. 嘗試動態載入 Firebase
       try {
         const fb = await import('./firebaseConfig');
         if (fb && fb.db) {
           dbRef.current = fb.db;
         }
       } catch (e) {
-        console.log("提示: 尚未設定 firebaseConfig.js 或載入失敗，系統將以本機模式運行。");
+        console.log("提示: 尚未設定 firebaseConfig.js，本機模式。");
       }
 
-      // 2. 如果成功取得 db，嘗試從雲端讀取
+      // 2. 嘗試從雲端讀取
       if (dbRef.current) {
         try {
-          const docRef = doc(dbRef.current, "school_data", "main_backup");
+          const docRef = doc(dbRef.current, "school_data", "main_backup_v3"); // V3 使用新節點
           const docSnap = await getDoc(docRef);
           
           if (docSnap.exists()) {
             const data = docSnap.data();
             setTeachers(data.teachers || []);
             setLogs(data.logs || []);
-            // 處理時間戳記格式
             const updatedTime = data.lastUpdated ? new Date(data.lastUpdated) : new Date();
             setLastSaved(updatedTime);
             loadedFromCloud = true;
-            setIsCloudEnabled(true); // 連線成功
+            setIsCloudEnabled(true); 
           } else {
-            console.log("雲端無資料，將使用預設值初始化。");
-            setIsCloudEnabled(true); // 連線成功但無資料
+            console.log("雲端無 V3 資料，嘗試讀取 V2 或初始化。");
+            setIsCloudEnabled(true); 
           }
         } catch (error) {
-          console.error("雲端讀取失敗 (可能是權限或網絡問題):", error);
+          console.error("雲端讀取失敗:", error);
           setIsCloudEnabled(false);
         }
       }
 
-      // 3. 如果雲端沒讀到資料 (或沒設定 Firebase)，則讀取 LocalStorage
+      // 3. 讀取 LocalStorage
       if (!loadedFromCloud) {
-        const localTeachers = localStorage.getItem(STORAGE_KEY_TEACHERS);
-        const localLogs = localStorage.getItem(STORAGE_KEY_LOGS);
+        // 嘗試讀取 V3，如果沒有，讀取 V2 遷移資料
+        let localTeachers = localStorage.getItem(STORAGE_KEY_TEACHERS);
+        let localLogs = localStorage.getItem(STORAGE_KEY_LOGS);
+        
+        if (!localTeachers) {
+             // 嘗試遷移 V2 資料
+             localTeachers = localStorage.getItem('substitution_system_teachers_data_v2');
+             localLogs = localStorage.getItem('substitution_system_logs_data_v2');
+        }
 
         if (localTeachers) {
           try {
             setTeachers(JSON.parse(localTeachers));
-          } catch (e) {
-            console.error("LocalStorage 解析錯誤", e);
-          }
+          } catch (e) { console.error("LS Error", e); }
         } else {
-          // 預設範例資料
           setTeachers([
             { id: 1, name: "陳大文", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} },
             { id: 2, name: "李小美", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} }
@@ -100,9 +106,7 @@ export default function SubstitutionApp() {
         if (localLogs) {
           try {
             setLogs(JSON.parse(localLogs));
-          } catch (e) {
-            console.error("LocalStorage Log 解析錯誤", e);
-          }
+          } catch (e) { console.error("LS Log Error", e); }
         }
       }
       setIsLoading(false);
@@ -111,29 +115,27 @@ export default function SubstitutionApp() {
     initData();
   }, []);
 
-  // --- 自動儲存機制 (Debounce) ---
+  // --- 自動儲存機制 ---
   useEffect(() => {
     if (isLoading) return;
 
-    // 1. 總是備份到 LocalStorage
     localStorage.setItem(STORAGE_KEY_TEACHERS, JSON.stringify(teachers));
     localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(logs));
 
-    // 2. 如果連線成功，則同步到雲端
     const timer = setTimeout(async () => {
       if (isCloudEnabled && dbRef.current) {
         try {
-          await setDoc(doc(dbRef.current, "school_data", "main_backup"), {
+          await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
             teachers: teachers,
             logs: logs,
             lastUpdated: new Date().toISOString()
           });
           setLastSaved(new Date());
         } catch (e) {
-          console.error("雲端儲存失敗:", e);
+          console.error("Cloud Save Error:", e);
         }
       }
-    }, 2000); // 延遲 2 秒儲存
+    }, 2000);
 
     return () => clearTimeout(timer);
   }, [teachers, logs, isCloudEnabled, isLoading]);
@@ -141,52 +143,44 @@ export default function SubstitutionApp() {
   // --- 手動強制上傳 ---
   const handleManualCloudUpload = async () => {
     if (!dbRef.current) {
-      alert("❌ 錯誤：尚未偵測到 Firebase 資料庫連線。\n請檢查 src/firebaseConfig.js 設定檔是否正確。");
+      alert("❌ 錯誤：尚未偵測到 Firebase 資料庫連線。");
       return;
     }
-
     const now = new Date();
-    const isoTime = now.toISOString();
     setSaveStatus('saving');
-
     try {
-      await setDoc(doc(dbRef.current, "school_data", "main_backup"), {
+      await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
         teachers: teachers,
         logs: logs,
-        lastUpdated: isoTime
+        lastUpdated: now.toISOString()
       });
       setLastSaved(now);
       setSaveStatus('saved');
       setIsCloudEnabled(true);
-      alert("✅ 上傳成功！\n\n資料已成功寫入 Firebase 資料庫。\n現在其他裝置開啟網頁時，將會同步此份資料。");
+      alert("✅ V3 資料上傳成功！");
     } catch (e) {
-      console.error("手動上傳失敗:", e);
       setSaveStatus('error');
-      let errorMsg = e.message;
-      if (e.code === 'permission-denied') errorMsg = "權限不足 (Permission Denied)，請檢查 Rules。";
-      alert(`❌ 上傳失敗\n\n原因：${errorMsg}`);
+      alert(`❌ 上傳失敗: ${e.message}`);
     }
   };
 
-  // --- 日期變更時，重算當日空堂 (僅前端顯示用) ---
+  // --- 日期變更與重算 ---
   useEffect(() => {
     if (!formDate) return;
     const dayOfWeek = new Date(formDate).getDay(); 
     if (dayOfWeek === 0 || dayOfWeek === 6) return;
 
     setTeachers(prev => prev.map(t => {
-      // 根據 Master Schedule 重置 freePeriods (確保資料一致性)
       if (t.masterSchedule && t.masterSchedule[dayOfWeek]) {
         const busyPeriods = t.masterSchedule[dayOfWeek];
         const newFreePeriods = PERIODS.filter(p => !busyPeriods.includes(p));
-        // 注意：這裡只更新 freePeriods，不應該重置其他屬性
         return { ...t, freePeriods: newFreePeriods };
       }
       return t;
     }));
   }, [formDate]);
 
-  // --- UI 連動邏輯 ---
+  // --- UI Reset ---
   useEffect(() => { setSelectedPeriod(''); setClassName(''); }, [formDate, absentTeacherId]);
 
   const handlePeriodChange = (e) => {
@@ -201,13 +195,13 @@ export default function SubstitutionApp() {
     }
   };
 
-  // --- 輔助函式 ---
+  // --- Helpers ---
   const getSortedTeachers = (list) => [...list].sort((a, b) => a.name.localeCompare(b.name, "zh-HK"));
   const showAlert = (title, message) => setModal({ isOpen: true, type: 'info', title, message });
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
 
-  // --- 功能：教師管理 ---
+  // --- CRUD ---
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
@@ -224,7 +218,6 @@ export default function SubstitutionApp() {
     setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, freePeriods: t.freePeriods.includes(period) ? t.freePeriods.filter(p => p !== period) : [...t.freePeriods, period].sort((a, b) => a - b) } : t));
   };
 
-  // --- 功能：排代核心 ---
   const handleSubstitutionClick = (subTeacherId, isExtracting) => {
     if (!absentTeacherId || !selectedPeriod || !className) return showAlert("資料不完整", "請填寫完整資訊");
     const subT = teachers.find(t => t.id == subTeacherId);
@@ -242,13 +235,11 @@ export default function SubstitutionApp() {
     );
 
     showConfirm("確認安排", msg, () => {
-      // 更新統計
       setTeachers(prev => prev.map(t => {
         if (t.id == absentTeacherId) return { ...t, absences: (t.absences || 0) + 1 };
         if (t.id == subTeacherId) return { ...t, substitutions: (t.substitutions || 0) + 1 };
         return t;
       }));
-      // 寫入日誌
       setLogs(prev => [{ id: Date.now(), date: formDate, period: parseInt(selectedPeriod), className, absentName: absT.name, absentId: absT.id, subName: subT.name, subId: subT.id, timestamp: new Date().toLocaleString() }, ...prev]);
       closeModal();
       setClassName(''); setAbsentTeacherId(''); setSelectedPeriod('');
@@ -262,7 +253,6 @@ export default function SubstitutionApp() {
     showConfirm("確認刪除", "確定刪除此紀錄？相關統計將自動回滾。", () => {
       setTeachers(prev => prev.map(t => {
         let changes = {};
-        // 寬鬆比對 ID 或 Name 以確保回滾
         if ((log.absentId && t.id == log.absentId) || (!log.absentId && t.name === log.absentName)) changes.absences = Math.max(0, (t.absences || 0) - 1);
         if ((log.subId && t.id == log.subId) || (!log.subId && t.name === log.subName)) changes.substitutions = Math.max(0, (t.substitutions || 0) - 1);
         return Object.keys(changes).length ? { ...t, ...changes } : t;
@@ -272,10 +262,47 @@ export default function SubstitutionApp() {
     });
   };
 
-  // --- 演算法：搜尋代課老師 (核心邏輯) ---
+  // --- Drag and Drop Logic (V3 New) ---
+  const handleDragStart = (e, logId) => {
+    setDraggedLogId(logId);
+    e.dataTransfer.effectAllowed = "move";
+    // 設置拖曳時的視覺效果 (可選)
+    // e.dataTransfer.setData("text/plain", logId);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault(); // 必要：允許 Drop
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDrop = (e, targetLogId) => {
+    e.preventDefault();
+    if (!draggedLogId || draggedLogId === targetLogId) return;
+
+    const sourceLog = logs.find(l => l.id === draggedLogId);
+    const targetLog = logs.find(l => l.id === targetLogId);
+
+    if (!sourceLog || !targetLog) return;
+
+    // 交換邏輯：只交換 Sub Info (代課老師)，保持 Period, Class, Absent Teacher 不變
+    // 這樣就像是把 A 老師改派去代 B 課，把 B 老師改派去代 A 課
+    const newLogs = logs.map(l => {
+      if (l.id === draggedLogId) {
+        return { ...l, subName: targetLog.subName, subId: targetLog.subId };
+      }
+      if (l.id === targetLogId) {
+        return { ...l, subName: sourceLog.subName, subId: sourceLog.subId };
+      }
+      return l;
+    });
+
+    setLogs(newLogs);
+    setDraggedLogId(null);
+    // 註：因為只是交換代課任務，雙方的總代課數(substitutions count) 不變，所以不需更新 teachers state
+  };
+
   const getAvailableTeachers = () => {
     if (!selectedPeriod || !absentTeacherId) return [];
-    
     const p = parseInt(selectedPeriod);
     const dayOfWeek = new Date(formDate).getDay();
     const targetKey = `${dayOfWeek}-${p}`; 
@@ -320,7 +347,7 @@ export default function SubstitutionApp() {
       });
   };
 
-  // --- CSV 匯入與備份 ---
+  // --- CSV / Backup ---
   const handleCSVImport = (e, type) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -357,7 +384,7 @@ export default function SubstitutionApp() {
              if(!newTeachers.find(t => t.name === name)) newTeachers.push({ id: Date.now()+Math.random(), name, freePeriods:[], absences:0, substitutions:0, masterSchedule: scheduleMap[name], scheduleDetails: detailsMap[name] || {} });
           });
         }
-        setTeachers(newTeachers); showAlert("匯入成功", `已處理 ${count} 筆資料。請點擊「手動上傳雲端」以確保保存。`);
+        setTeachers(newTeachers); showAlert("匯入成功", `已處理 ${count} 筆資料。請手動上傳雲端保存。`);
       } catch (err) { showAlert("錯誤", "格式有誤"); }
       e.target.value = '';
     };
@@ -372,17 +399,12 @@ export default function SubstitutionApp() {
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
-  // 補回這個遺失的函式！
   const downloadTimetableTemplate = () => {
     const csvContent = "\ufeff姓名,星期(1-5),節次(1-9),班級(重要),科目,是否入班(是/否)\n陳大文,1,1,3A,數學,否\n陳大文,1,2,3A,數學,否\n李小美,1,1,3A,數學支援,是\n李小美,1,3,1C,英文,否";
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', 'timetable_template_v2.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const link = document.createElement('a'); link.href = url; link.setAttribute('download', 'timetable_template_v2.csv');
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
   const downloadBackup = () => {
@@ -397,7 +419,7 @@ export default function SubstitutionApp() {
     reader.onload = (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
-        if(data.teachers && data.logs && confirm("確定還原？這將覆蓋現有資料。")) {
+        if(data.teachers && data.logs && confirm("確定還原？")) {
           setTeachers(data.teachers); setLogs(data.logs); showAlert("成功", "資料已還原。");
         }
       } catch(err) { showAlert("錯誤", "檔案無效"); }
@@ -439,8 +461,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料...</h2>
-        <p className="text-gray-500 text-sm mt-2">若是初次使用，請稍候</p>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3)...</h2>
       </div>
     );
   }
@@ -466,7 +487,6 @@ export default function SubstitutionApp() {
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold text-purple-800 flex items-center"><Search className="mr-2" /> 安排代課</h2>
           </div>
-          
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium text-purple-700">1. 日期</label>
@@ -544,16 +564,13 @@ export default function SubstitutionApp() {
         <div className="flex gap-2">
           <button onClick={downloadTimetableTemplate} className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm border border-purple-200 hover:bg-purple-100"><Download size={14} className="inline mr-1"/>範本</button>
           <button onClick={() => timetableImportRef.current.click()} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm shadow hover:bg-purple-700"><FileText size={14} className="inline mr-1"/>匯入課表</button>
-          {/* 強制上傳按鈕 (更名為 Upload 避免相依性問題) */}
-          <button onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center">
-            <Upload size={14} className="mr-1"/> 手動上傳雲端
-          </button>
+          <button onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center"><Upload size={14} className="mr-1"/> 手動上傳雲端</button>
           <input type="file" ref={timetableImportRef} onChange={e => handleCSVImport(e, 'timetable')} className="hidden" />
         </div>
       </div>
       <form onSubmit={addTeacher} className="flex gap-2">
         <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="新老師姓名" className="border border-purple-200 p-2 rounded-lg flex-1 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
-        <button className="bg-fuchsia-600 text-white px-4 rounded-lg hover:bg-fuchsia-700 shadow"><Plus size={18} className="mr-1"/> 新增</button>
+        <button className="bg-fuchsia-600 text-white px-4 rounded-lg hover:bg-fuchsia-700 shadow"><Plus/></button>
       </form>
       <div className="overflow-x-auto rounded-xl border border-purple-100">
         <table className="w-full text-sm">
@@ -589,8 +606,7 @@ export default function SubstitutionApp() {
       </div>
       <div className="bg-gradient-to-r from-gray-50 to-purple-50 p-6 rounded-2xl shadow-inner border border-purple-100">
         <h3 className="font-bold text-gray-700 mb-2 flex items-center"><Save className="mr-2" size={18}/> 備份與還原</h3>
-        <p className="text-xs text-gray-500 mb-4">系統會自動備份於本機。若需轉移裝置，請下載備份檔 (JSON)。</p>
-        <div className="flex gap-3">
+        <div className="flex gap-3 mt-3">
           <button onClick={downloadBackup} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm shadow hover:bg-blue-700 transition-colors"><Download size={16} className="inline mr-2"/>下載備份</button>
           <button onClick={()=>backupImportRef.current.click()} className="bg-white text-gray-700 border border-gray-300 px-4 py-2 rounded-lg text-sm shadow-sm hover:bg-gray-50 transition-colors"><RefreshCw size={16} className="inline mr-2"/>還原備份</button>
           <input type="file" ref={backupImportRef} onChange={restoreBackup} className="hidden" />
@@ -600,26 +616,100 @@ export default function SubstitutionApp() {
     </div>
   );
 
+  // --- New V3 Report View (Matrix) ---
   const ReportView = () => {
     const dailyLogs = logs.filter(l => l.date === formDate);
+    
+    // 1. 獲取當日所有「缺席老師」 (Columns)
+    const uniqueAbsentIds = [...new Set(dailyLogs.map(l => l.absentId))];
+    const absentCols = uniqueAbsentIds.map(id => {
+      const log = dailyLogs.find(l => l.absentId === id);
+      return { id, name: log.absentName };
+    }).sort((a, b) => a.name.localeCompare(b.name, "zh-HK"));
+
+    // 2. 獲取每個格子的代課資料
+    const getCellData = (period, absentId) => {
+      return dailyLogs.find(l => l.period === period && l.absentId === absentId);
+    };
+
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
-        <div className="flex justify-between items-center mb-4"><h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 日誌</h2><input type="date" value={formDate} onChange={e=>setFormDate(e.target.value)} className="border border-purple-200 p-1 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400"/></div>
-        {dailyLogs.length===0 ? <div className="text-center py-12 bg-purple-50 rounded-xl border border-purple-100 border-dashed"><Heart className="mx-auto text-purple-200 mb-2" size={40}/><p className="text-purple-400 text-sm">尚無紀錄</p></div> : 
-        <div className="space-y-3">
-          <div className="p-4 bg-gradient-to-br from-yellow-50 to-orange-50 border border-yellow-100 rounded-xl shadow-sm">
-            <h3 className="font-bold text-gray-800 border-b border-yellow-200 pb-2 mb-3 text-center">{formDate} 代課公告</h3>
-            <div className="grid gap-3">{dailyLogs.sort((a,b)=>a.period-b.period).map(l => (
-              <div key={l.id} className="flex justify-between items-center p-3 bg-white rounded-lg border border-yellow-100 shadow-sm hover:shadow-md transition-shadow group">
-                <div className="flex gap-3 items-center"><span className="bg-purple-100 text-purple-800 px-2 py-0.5 rounded text-xs font-bold">第{l.period}節</span> <span className="font-bold text-gray-700">{l.className}</span></div>
-                <div className="flex gap-3 text-sm items-center">
-                  <span className="line-through text-gray-400 text-xs">{l.absentName}</span> <ArrowRight size={12} className="text-gray-300"/> <span className="text-fuchsia-600 font-bold bg-fuchsia-50 px-2 py-0.5 rounded">{l.subName}</span>
-                  <button onClick={()=>deleteLog(l.id)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
-                </div>
-              </div>
-            ))}</div>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3)</h2>
+          <div className="flex items-center gap-2">
+            <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 flex items-center">
+              <GripHorizontal size={12} className="mr-1"/> 可拖曳互換代課
+            </div>
+            <input type="date" value={formDate} onChange={e=>setFormDate(e.target.value)} className="border border-purple-200 p-1 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-sm"/>
           </div>
-        </div>}
+        </div>
+
+        {dailyLogs.length === 0 ? (
+          <div className="text-center py-12 bg-purple-50 rounded-xl border border-purple-100 border-dashed">
+            <Heart className="mx-auto text-purple-200 mb-2" size={40}/>
+            <p className="text-purple-400 text-sm">尚無紀錄</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-purple-100 shadow-sm">
+            <table className="min-w-full bg-white text-sm border-collapse">
+              <thead>
+                <tr className="bg-purple-600 text-white">
+                  <th className="p-3 border-r border-purple-500 w-20 sticky left-0 z-10 bg-purple-600">節次</th>
+                  {absentCols.map(col => (
+                    <th key={col.id} className="p-3 min-w-[140px] text-center border-r border-purple-500 last:border-0">
+                      <div className="font-bold">{col.name}</div>
+                      <div className="text-[10px] opacity-75 font-normal">缺席</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PERIODS.map(period => (
+                  <tr key={period} className="border-b border-purple-50 hover:bg-purple-50/50">
+                    <td className="p-3 font-bold text-center text-purple-800 bg-purple-50 sticky left-0 z-10 border-r border-purple-100">
+                      第 {period} 節
+                    </td>
+                    {absentCols.map(col => {
+                      const log = getCellData(period, col.id);
+                      return (
+                        <td 
+                          key={`${period}-${col.id}`} 
+                          className={`p-2 border-r border-purple-100 text-center relative transition-colors
+                            ${draggedLogId === log?.id && log ? 'opacity-50 bg-orange-100' : ''}
+                          `}
+                          onDragOver={handleDragOver}
+                          onDrop={(e) => log && handleDrop(e, log.id)}
+                        >
+                          {log ? (
+                            <div 
+                              className="bg-white border border-purple-200 rounded-lg p-2 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md hover:border-purple-400 group"
+                              draggable
+                              onDragStart={(e) => handleDragStart(e, log.id)}
+                            >
+                              <div className="font-bold text-fuchsia-600 text-base mb-1">{log.subName}</div>
+                              <div className="text-xs text-gray-500 bg-gray-100 px-1 rounded inline-block">{log.className}</div>
+                              
+                              {/* 刪除按鈕 (Hover 顯示) */}
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); deleteLog(log.id); }}
+                                className="absolute -top-1 -right-1 bg-red-100 text-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 hover:bg-red-200 transition-opacity shadow-sm"
+                                title="刪除"
+                              >
+                                <X size={10} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="text-gray-300 text-xs">-</div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     );
   };
@@ -630,7 +720,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V2</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
