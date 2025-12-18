@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, CloudUpload } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2 } from 'lucide-react';
+// 注意：即使沒有設定 firebaseConfig.js，保留這行 import 通常不會報錯，只要沒用到裡面的函數
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 // --- 常數設定 ---
@@ -17,8 +18,9 @@ export default function SubstitutionApp() {
   const [isCloudEnabled, setIsCloudEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [lastSaved, setLastSaved] = useState(null);
-  const [saveStatus, setSaveStatus] = useState('idle'); // idle, saving, saved, error
+  const [saveStatus, setSaveStatus] = useState('idle');
 
+  // 用 useRef 來儲存資料庫連線實例
   const dbRef = useRef(null);
 
   // 介面狀態
@@ -39,130 +41,104 @@ export default function SubstitutionApp() {
   useEffect(() => {
     const initData = async () => {
       setIsLoading(true);
-      let dbInstance = null;
+      let loadedFromCloud = false;
 
-      // 1. 嘗試載入 Firebase
+      // 1. 嘗試動態載入 Firebase 設定 (移至 useEffect 內部，避免 Top-level await 錯誤)
       try {
         const fb = await import('./firebaseConfig');
         if (fb && fb.db) {
           dbRef.current = fb.db;
-          dbInstance = fb.db;
-          console.log("Firebase 設定載入成功");
         }
       } catch (e) {
-        console.warn("找不到 firebaseConfig.js，將以本機模式執行。");
+        console.log("提示: 尚未設定 firebaseConfig.js 或載入失敗，系統將以本機模式運行。");
       }
 
-      // 2. 讀取本機資料
-      let localData = null;
-      let localTime = 0;
-      try {
-        const t = localStorage.getItem(STORAGE_KEY_TEACHERS);
-        const l = localStorage.getItem(STORAGE_KEY_LOGS);
-        const timeStr = localStorage.getItem(STORAGE_KEY_TIMESTAMP);
-        if (t) {
-          localData = { teachers: JSON.parse(t), logs: l ? JSON.parse(l) : [] };
-          if (timeStr) localTime = new Date(timeStr).getTime();
-        }
-      } catch (e) { console.error("本機資料讀取錯誤", e); }
-
-      // 3. 讀取雲端資料
-      let cloudData = null;
-      let cloudTime = -1;
-      
-      if (dbInstance) {
+      // 2. 如果成功取得 db，嘗試從雲端讀取
+      if (dbRef.current) {
         try {
-          const docRef = doc(dbInstance, "school_data", "main_backup");
+          const docRef = doc(dbRef.current, "school_data", "main_backup");
           const docSnap = await getDoc(docRef);
+          
           if (docSnap.exists()) {
-            cloudData = docSnap.data();
-            if (cloudData.lastUpdated) {
-              cloudTime = new Date(cloudData.lastUpdated).getTime();
-            }
-            setIsCloudEnabled(true);
-            console.log("雲端資料讀取成功");
+            const data = docSnap.data();
+            setTeachers(data.teachers || []);
+            setLogs(data.logs || []);
+            // 處理時間戳記格式
+            const updatedTime = data.lastUpdated ? new Date(data.lastUpdated) : new Date();
+            setLastSaved(updatedTime);
+            loadedFromCloud = true;
+            setIsCloudEnabled(true); // 連線成功
           } else {
-            // 雲端連線成功但無資料，視為已連線
-            setIsCloudEnabled(true);
-            console.log("雲端無資料，準備初始化");
+            console.log("雲端無資料，將使用預設值初始化。");
+            setIsCloudEnabled(true); // 連線成功但無資料
           }
         } catch (error) {
-          console.error("雲端讀取失敗:", error);
-          // 若讀取失敗 (如權限不足)，暫時不啟用雲端
+          console.error("雲端讀取失敗 (可能是權限或網絡問題):", error);
           setIsCloudEnabled(false);
         }
       }
 
-      // 4. 比對與決策
-      let finalTeachers = [];
-      let finalLogs = [];
-      let finalTime = new Date();
+      // 3. 如果雲端沒讀到資料 (或沒設定 Firebase)，則讀取 LocalStorage
+      if (!loadedFromCloud) {
+        const localTeachers = localStorage.getItem(STORAGE_KEY_TEACHERS);
+        const localLogs = localStorage.getItem(STORAGE_KEY_LOGS);
 
-      if (localData && localTime > cloudTime) {
-        console.log("使用本機較新資料");
-        finalTeachers = localData.teachers;
-        finalLogs = localData.logs;
-        finalTime = new Date(localTime);
-      } else if (cloudData) {
-        console.log("使用雲端資料");
-        finalTeachers = cloudData.teachers || [];
-        finalLogs = cloudData.logs || [];
-        finalTime = new Date(cloudTime);
-      } else {
-        console.log("無資料，使用預設值");
-        finalTeachers = [
-          { id: 1, name: "陳大文", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} },
-          { id: 2, name: "李小美", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} }
-        ];
+        if (localTeachers) {
+          try {
+            setTeachers(JSON.parse(localTeachers));
+          } catch (e) {
+            console.error("LocalStorage 解析錯誤", e);
+          }
+        } else {
+          // 預設範例資料
+          setTeachers([
+            { id: 1, name: "陳大文", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} },
+            { id: 2, name: "李小美", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} }
+          ]);
+        }
+        
+        if (localLogs) {
+          try {
+            setLogs(JSON.parse(localLogs));
+          } catch (e) {
+            console.error("LocalStorage Log 解析錯誤", e);
+          }
+        }
       }
-
-      setTeachers(finalTeachers);
-      setLogs(finalLogs);
-      setLastSaved(finalTime);
       setIsLoading(false);
     };
 
     initData();
   }, []);
 
-  // --- 自動儲存機制 ---
+  // --- 自動儲存機制 (Debounce) ---
   useEffect(() => {
     if (isLoading) return;
 
-    const now = new Date();
-    const isoTime = now.toISOString();
-
-    // 1. 存本機
+    // 1. 總是備份到 LocalStorage
     localStorage.setItem(STORAGE_KEY_TEACHERS, JSON.stringify(teachers));
     localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(logs));
-    localStorage.setItem(STORAGE_KEY_TIMESTAMP, isoTime);
 
-    // 2. 存雲端 (僅當雲端已啟用時)
-    const saveDataToCloud = async () => {
-      if (dbRef.current && isCloudEnabled) {
-        setSaveStatus('saving');
+    // 2. 如果連線成功，則同步到雲端
+    const timer = setTimeout(async () => {
+      if (isCloudEnabled && dbRef.current) {
         try {
           await setDoc(doc(dbRef.current, "school_data", "main_backup"), {
             teachers: teachers,
             logs: logs,
-            lastUpdated: isoTime
+            lastUpdated: new Date().toISOString()
           });
-          setLastSaved(now);
-          setSaveStatus('saved');
-          setTimeout(() => setSaveStatus('idle'), 2000);
+          setLastSaved(new Date());
         } catch (e) {
           console.error("雲端儲存失敗:", e);
-          setSaveStatus('error');
         }
       }
-    };
+    }, 2000); // 延遲 2 秒儲存
 
-    const timer = setTimeout(saveDataToCloud, 1000);
     return () => clearTimeout(timer);
-
   }, [teachers, logs, isCloudEnabled, isLoading]);
 
-  // --- 手動強制上傳雲端 (新增功能) ---
+  // --- 手動強制上傳 ---
   const handleManualCloudUpload = async () => {
     if (!dbRef.current) {
       alert("❌ 錯誤：尚未偵測到 Firebase 資料庫連線。\n請檢查 src/firebaseConfig.js 設定檔是否正確。");
@@ -181,42 +157,36 @@ export default function SubstitutionApp() {
       });
       setLastSaved(now);
       setSaveStatus('saved');
-      setIsCloudEnabled(true); // 強制設為已啟用
+      setIsCloudEnabled(true);
       alert("✅ 上傳成功！\n\n資料已成功寫入 Firebase 資料庫。\n現在其他裝置開啟網頁時，將會同步此份資料。");
     } catch (e) {
       console.error("手動上傳失敗:", e);
       setSaveStatus('error');
-      
-      let errorMsg = "未知錯誤";
-      if (e.code === 'permission-denied') {
-        errorMsg = "權限不足 (Permission Denied)。\n請到 Firebase Console -> Firestore Database -> Rules，將規則改為 true。";
-      } else if (e.code === 'unavailable') {
-        errorMsg = "網路連線問題，無法連接到 Firebase 伺服器。";
-      } else {
-        errorMsg = e.message;
-      }
-      
+      let errorMsg = e.message;
+      if (e.code === 'permission-denied') errorMsg = "權限不足 (Permission Denied)，請檢查 Rules。";
       alert(`❌ 上傳失敗\n\n原因：${errorMsg}`);
     }
   };
 
-  // --- 日期變更處理 ---
+  // --- 日期變更時，重算當日空堂 (僅前端顯示用) ---
   useEffect(() => {
     if (!formDate) return;
     const dayOfWeek = new Date(formDate).getDay(); 
     if (dayOfWeek === 0 || dayOfWeek === 6) return;
 
     setTeachers(prev => prev.map(t => {
+      // 根據 Master Schedule 重置 freePeriods (確保資料一致性)
       if (t.masterSchedule && t.masterSchedule[dayOfWeek]) {
         const busyPeriods = t.masterSchedule[dayOfWeek];
         const newFreePeriods = PERIODS.filter(p => !busyPeriods.includes(p));
+        // 注意：這裡只更新 freePeriods，不應該重置其他屬性
         return { ...t, freePeriods: newFreePeriods };
       }
       return t;
     }));
   }, [formDate]);
 
-  // --- UI Reset ---
+  // --- UI 連動邏輯 ---
   useEffect(() => { setSelectedPeriod(''); setClassName(''); }, [formDate, absentTeacherId]);
 
   const handlePeriodChange = (e) => {
@@ -231,13 +201,13 @@ export default function SubstitutionApp() {
     }
   };
 
-  // --- Helpers ---
+  // --- 輔助函式 ---
   const getSortedTeachers = (list) => [...list].sort((a, b) => a.name.localeCompare(b.name, "zh-HK"));
   const showAlert = (title, message) => setModal({ isOpen: true, type: 'info', title, message });
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
 
-  // --- CRUD ---
+  // --- 功能：教師管理 ---
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
@@ -254,6 +224,7 @@ export default function SubstitutionApp() {
     setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, freePeriods: t.freePeriods.includes(period) ? t.freePeriods.filter(p => p !== period) : [...t.freePeriods, period].sort((a, b) => a - b) } : t));
   };
 
+  // --- 功能：排代核心 ---
   const handleSubstitutionClick = (subTeacherId, isExtracting) => {
     if (!absentTeacherId || !selectedPeriod || !className) return showAlert("資料不完整", "請填寫完整資訊");
     const subT = teachers.find(t => t.id == subTeacherId);
@@ -271,11 +242,13 @@ export default function SubstitutionApp() {
     );
 
     showConfirm("確認安排", msg, () => {
+      // 更新統計
       setTeachers(prev => prev.map(t => {
         if (t.id == absentTeacherId) return { ...t, absences: (t.absences || 0) + 1 };
         if (t.id == subTeacherId) return { ...t, substitutions: (t.substitutions || 0) + 1 };
         return t;
       }));
+      // 寫入日誌
       setLogs(prev => [{ id: Date.now(), date: formDate, period: parseInt(selectedPeriod), className, absentName: absT.name, absentId: absT.id, subName: subT.name, subId: subT.id, timestamp: new Date().toLocaleString() }, ...prev]);
       closeModal();
       setClassName(''); setAbsentTeacherId(''); setSelectedPeriod('');
@@ -289,6 +262,7 @@ export default function SubstitutionApp() {
     showConfirm("確認刪除", "確定刪除此紀錄？相關統計將自動回滾。", () => {
       setTeachers(prev => prev.map(t => {
         let changes = {};
+        // 寬鬆比對 ID 或 Name 以確保回滾
         if ((log.absentId && t.id == log.absentId) || (!log.absentId && t.name === log.absentName)) changes.absences = Math.max(0, (t.absences || 0) - 1);
         if ((log.subId && t.id == log.subId) || (!log.subId && t.name === log.subName)) changes.substitutions = Math.max(0, (t.substitutions || 0) - 1);
         return Object.keys(changes).length ? { ...t, ...changes } : t;
@@ -298,6 +272,7 @@ export default function SubstitutionApp() {
     });
   };
 
+  // --- 演算法：搜尋代課老師 (核心邏輯) ---
   const getAvailableTeachers = () => {
     if (!selectedPeriod || !absentTeacherId) return [];
     
@@ -345,7 +320,7 @@ export default function SubstitutionApp() {
       });
   };
 
-  // --- CSV / Backup ---
+  // --- CSV 匯入與備份 ---
   const handleCSVImport = (e, type) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -382,8 +357,7 @@ export default function SubstitutionApp() {
              if(!newTeachers.find(t => t.name === name)) newTeachers.push({ id: Date.now()+Math.random(), name, freePeriods:[], absences:0, substitutions:0, masterSchedule: scheduleMap[name], scheduleDetails: detailsMap[name] || {} });
           });
         }
-        setTeachers(newTeachers); 
-        showAlert("匯入成功", `已處理 ${count} 筆資料。請點擊「手動上傳雲端」以確保保存。`);
+        setTeachers(newTeachers); showAlert("匯入成功", `已處理 ${count} 筆資料。請點擊「手動上傳雲端」以確保保存。`);
       } catch (err) { showAlert("錯誤", "格式有誤"); }
       e.target.value = '';
     };
@@ -396,6 +370,19 @@ export default function SubstitutionApp() {
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a'); link.href = url; link.setAttribute('download', `stats_${new Date().toISOString().slice(0,10)}.csv`);
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  };
+
+  // 補回這個遺失的函式！
+  const downloadTimetableTemplate = () => {
+    const csvContent = "\ufeff姓名,星期(1-5),節次(1-9),班級(重要),科目,是否入班(是/否)\n陳大文,1,1,3A,數學,否\n陳大文,1,2,3A,數學,否\n李小美,1,1,3A,數學支援,是\n李小美,1,3,1C,英文,否";
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'timetable_template_v2.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const downloadBackup = () => {
@@ -554,23 +541,19 @@ export default function SubstitutionApp() {
     <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4 animate-in fade-in zoom-in duration-300">
       <div className="flex flex-wrap justify-between items-center gap-2">
         <h2 className="text-xl font-bold text-purple-800 flex items-center"><UserCheck className="mr-2"/> 教師設定</h2>
-        
-        {/* 新增功能按鈕區 */}
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2">
           <button onClick={downloadTimetableTemplate} className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm border border-purple-200 hover:bg-purple-100"><Download size={14} className="inline mr-1"/>範本</button>
           <button onClick={() => timetableImportRef.current.click()} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm shadow hover:bg-purple-700"><FileText size={14} className="inline mr-1"/>匯入課表</button>
-          
-          {/* 強制上傳按鈕 */}
+          {/* 強制上傳按鈕 (更名為 Upload 避免相依性問題) */}
           <button onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center">
-            <CloudUpload size={14} className="mr-1"/> 手動上傳雲端
+            <Upload size={14} className="mr-1"/> 手動上傳雲端
           </button>
-          
           <input type="file" ref={timetableImportRef} onChange={e => handleCSVImport(e, 'timetable')} className="hidden" />
         </div>
       </div>
       <form onSubmit={addTeacher} className="flex gap-2">
         <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="新老師姓名" className="border border-purple-200 p-2 rounded-lg flex-1 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
-        <button className="bg-fuchsia-600 text-white px-4 rounded-lg hover:bg-fuchsia-700 shadow"><Plus/></button>
+        <button className="bg-fuchsia-600 text-white px-4 rounded-lg hover:bg-fuchsia-700 shadow"><Plus size={18} className="mr-1"/> 新增</button>
       </form>
       <div className="overflow-x-auto rounded-xl border border-purple-100">
         <table className="w-full text-sm">
@@ -648,7 +631,6 @@ export default function SubstitutionApp() {
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
              <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V2</div>
-             
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
