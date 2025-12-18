@@ -255,7 +255,7 @@ export default function SubstitutionApp() {
     });
   };
 
-  // --- Drag and Drop ---
+  // --- Drag and Drop (V3 Fixed) ---
   const handleDragStart = (e, logId) => {
     setDraggedLogId(logId);
     e.dataTransfer.effectAllowed = "move";
@@ -275,14 +275,31 @@ export default function SubstitutionApp() {
 
     if (!sourceLog || !targetLog) return;
 
+    // 交換邏輯：明確指定只交換 subName 和 subId (代課老師)
+    // 這樣 className (班別) 和 absentName (缺席老師) 就會留在原本的格子裡
     const newLogs = logs.map(l => {
-      if (l.id === draggedLogId) return { ...l, subName: targetLog.subName, subId: targetLog.subId };
-      if (l.id === targetLogId) return { ...l, subName: sourceLog.subName, subId: sourceLog.subId };
+      // 如果是「被拖曳的格子」 (A 格)，它的代課老師變成 B 格的人
+      if (l.id === draggedLogId) {
+        return { 
+          ...l, 
+          subName: targetLog.subName, 
+          subId: targetLog.subId 
+        };
+      }
+      // 如果是「目標格子」 (B 格)，它的代課老師變成 A 格的人
+      if (l.id === targetLogId) {
+        return { 
+          ...l, 
+          subName: sourceLog.subName, 
+          subId: sourceLog.subId 
+        };
+      }
       return l;
     });
 
     setLogs(newLogs);
     setDraggedLogId(null);
+    showAlert("調動成功", `已互換代課老師：\n${sourceLog.subName} ⟷ ${targetLog.subName}`);
   };
 
   const getAvailableTeachers = () => {
@@ -661,6 +678,7 @@ export default function SubstitutionApp() {
                               onDragStart={(e) => handleDragStart(e, log.id)}
                             >
                               <div className="font-bold text-fuchsia-600 text-base mb-1">{log.subName}</div>
+                              {/* 顯示固定不動的班別 */}
                               <div className="text-xs text-gray-500 bg-gray-100 px-1 rounded inline-block">{log.className}</div>
                               
                               <button 
