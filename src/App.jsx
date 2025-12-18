@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2 } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 // --- 常數設定 ---
 const TOTAL_PERIODS = 9;
 const PERIODS = Array.from({ length: TOTAL_PERIODS }, (_, i) => i + 1);
 const CORE_SUBJECTS = ['中文', '英文', '數學', 'CHI', 'ENG', 'MATH', 'CHINESE', 'ENGLISH', 'MATHEMATICS'];
-const STORAGE_KEY_TEACHERS = 'substitution_system_teachers_data';
-const STORAGE_KEY_LOGS = 'substitution_system_logs_data';
+const STORAGE_KEY_TEACHERS = 'substitution_system_teachers_data_v2';
+const STORAGE_KEY_LOGS = 'substitution_system_logs_data_v2';
+const STORAGE_KEY_TIMESTAMP = 'substitution_system_last_updated_v2';
 
 export default function SubstitutionApp() {
   // --- 狀態管理 ---
@@ -16,8 +17,8 @@ export default function SubstitutionApp() {
   const [isCloudEnabled, setIsCloudEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [lastSaved, setLastSaved] = useState(null);
+  const [saveStatus, setSaveStatus] = useState('idle'); // idle, saving, saved, error
 
-  // 用 useRef 來儲存資料庫連線實例
   const dbRef = useRef(null);
 
   // 介面狀態
@@ -38,96 +39,138 @@ export default function SubstitutionApp() {
   useEffect(() => {
     const initData = async () => {
       setIsLoading(true);
-      let loadedFromCloud = false;
+      let dbInstance = null;
 
-      // 1. 嘗試動態載入 Firebase 設定
+      // 1. 嘗試載入 Firebase
       try {
         const fb = await import('./firebaseConfig');
         if (fb && fb.db) {
           dbRef.current = fb.db;
+          dbInstance = fb.db;
+          console.log("Firebase 設定載入成功");
         }
       } catch (e) {
-        console.log("提示: 尚未設定 firebaseConfig.js 或載入失敗，系統將以本機模式運行。");
+        console.warn("找不到 firebaseConfig.js，將以本機模式執行。");
       }
 
-      // 2. 如果成功取得 db，嘗試從雲端讀取
-      if (dbRef.current) {
+      // 2. 讀取本機資料
+      let localData = null;
+      let localTime = 0;
+      try {
+        const t = localStorage.getItem(STORAGE_KEY_TEACHERS);
+        const l = localStorage.getItem(STORAGE_KEY_LOGS);
+        const timeStr = localStorage.getItem(STORAGE_KEY_TIMESTAMP);
+        if (t) {
+          localData = { teachers: JSON.parse(t), logs: l ? JSON.parse(l) : [] };
+          if (timeStr) localTime = new Date(timeStr).getTime();
+        }
+      } catch (e) { console.error("本機資料讀取錯誤", e); }
+
+      // 3. 讀取雲端資料
+      let cloudData = null;
+      let cloudTime = -1;
+      
+      if (dbInstance) {
         try {
-          const docRef = doc(dbRef.current, "school_data", "main_backup");
+          const docRef = doc(dbInstance, "school_data", "main_backup");
           const docSnap = await getDoc(docRef);
-          
           if (docSnap.exists()) {
-            const data = docSnap.data();
-            setTeachers(data.teachers || []);
-            setLogs(data.logs || []);
-            const updatedTime = data.lastUpdated ? new Date(data.lastUpdated) : new Date();
-            setLastSaved(updatedTime);
-            loadedFromCloud = true;
-            setIsCloudEnabled(true); 
-          } else {
-            console.log("雲端無資料，將使用預設值初始化。");
+            cloudData = docSnap.data();
+            if (cloudData.lastUpdated) {
+              cloudTime = new Date(cloudData.lastUpdated).getTime();
+            }
             setIsCloudEnabled(true);
+            console.log("雲端資料讀取成功");
+          } else {
+            // 雲端連線成功但無資料，視為已連線
+            setIsCloudEnabled(true);
+            console.log("雲端無資料，準備初始化");
           }
         } catch (error) {
-          console.error("雲端讀取失敗 (可能是權限或網絡問題):", error);
+          console.error("雲端讀取失敗:", error);
+          // 若讀取失敗 (如權限不足)，暫時不啟用雲端，避免卡住
           setIsCloudEnabled(false);
+          if (error.code === 'permission-denied') {
+            alert("⚠️ 無法讀取雲端資料庫：權限不足。\n請檢查 Firebase Console > Firestore Database > Rules 是否已設為 true。");
+          }
         }
       }
 
-      // 3. 如果雲端沒讀到資料，則讀取 LocalStorage
-      if (!loadedFromCloud) {
-        const localTeachers = localStorage.getItem(STORAGE_KEY_TEACHERS);
-        const localLogs = localStorage.getItem(STORAGE_KEY_LOGS);
+      // 4. 比對與決策
+      let finalTeachers = [];
+      let finalLogs = [];
+      let finalTime = new Date();
 
-        if (localTeachers) {
-          try {
-            setTeachers(JSON.parse(localTeachers));
-          } catch (e) { console.error("LocalStorage 解析錯誤", e); }
-        } else {
-          setTeachers([
-            { id: 1, name: "陳大文", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} },
-            { id: 2, name: "李小美", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} }
-          ]);
-        }
-        
-        if (localLogs) {
-          try {
-            setLogs(JSON.parse(localLogs));
-          } catch (e) { console.error("LocalStorage Log 解析錯誤", e); }
-        }
+      if (localData && localTime > cloudTime) {
+        console.log("使用本機較新資料");
+        finalTeachers = localData.teachers;
+        finalLogs = localData.logs;
+        finalTime = new Date(localTime);
+      } else if (cloudData) {
+        console.log("使用雲端資料");
+        finalTeachers = cloudData.teachers || [];
+        finalLogs = cloudData.logs || [];
+        finalTime = new Date(cloudTime);
+      } else {
+        console.log("無資料，使用預設值");
+        finalTeachers = [
+          { id: 1, name: "陳大文", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} },
+          { id: 2, name: "李小美", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} }
+        ];
       }
+
+      setTeachers(finalTeachers);
+      setLogs(finalLogs);
+      setLastSaved(finalTime);
       setIsLoading(false);
     };
 
     initData();
   }, []);
 
-  // --- 自動儲存機制 ---
+  // --- 自動儲存機制 (含強制錯誤提示) ---
   useEffect(() => {
     if (isLoading) return;
 
+    const now = new Date();
+    const isoTime = now.toISOString();
+
+    // 1. 存本機
     localStorage.setItem(STORAGE_KEY_TEACHERS, JSON.stringify(teachers));
     localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(logs));
+    localStorage.setItem(STORAGE_KEY_TIMESTAMP, isoTime);
 
-    const timer = setTimeout(async () => {
-      if (isCloudEnabled && dbRef.current) {
+    // 2. 存雲端
+    const saveDataToCloud = async () => {
+      // 只有在「確實有連上 Firebase」且「啟用雲端」時才存
+      if (dbRef.current && isCloudEnabled) {
+        setSaveStatus('saving');
         try {
           await setDoc(doc(dbRef.current, "school_data", "main_backup"), {
             teachers: teachers,
             logs: logs,
-            lastUpdated: new Date().toISOString()
+            lastUpdated: isoTime
           });
-          setLastSaved(new Date());
+          setLastSaved(now);
+          setSaveStatus('saved');
+          setTimeout(() => setSaveStatus('idle'), 2000);
         } catch (e) {
           console.error("雲端儲存失敗:", e);
+          setSaveStatus('error');
+          // 如果是因為權限問題，跳一次 Alert 提醒用戶
+          if (e.code === 'permission-denied') {
+             alert("⚠️ 雲端儲存失敗：權限被拒。\n請到 Firebase Console 修改規則 (Rules) 為 true。");
+          }
         }
       }
-    }, 2000);
+    };
 
+    const timer = setTimeout(saveDataToCloud, 1000);
     return () => clearTimeout(timer);
+
   }, [teachers, logs, isCloudEnabled, isLoading]);
 
-  // --- 重算當日空堂 ---
+  // --- 日期變更處理 ---
   useEffect(() => {
     if (!formDate) return;
     const dayOfWeek = new Date(formDate).getDay(); 
@@ -143,7 +186,7 @@ export default function SubstitutionApp() {
     }));
   }, [formDate]);
 
-  // --- UI 連動 ---
+  // --- UI Reset ---
   useEffect(() => { setSelectedPeriod(''); setClassName(''); }, [formDate, absentTeacherId]);
 
   const handlePeriodChange = (e) => {
@@ -158,13 +201,13 @@ export default function SubstitutionApp() {
     }
   };
 
-  // --- 輔助函式 ---
+  // --- Helpers ---
   const getSortedTeachers = (list) => [...list].sort((a, b) => a.name.localeCompare(b.name, "zh-HK"));
   const showAlert = (title, message) => setModal({ isOpen: true, type: 'info', title, message });
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
 
-  // --- 功能函式 ---
+  // --- CRUD ---
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
@@ -225,7 +268,6 @@ export default function SubstitutionApp() {
     });
   };
 
-  // --- 核心演算法 ---
   const getAvailableTeachers = () => {
     if (!selectedPeriod || !absentTeacherId) return [];
     
@@ -273,7 +315,7 @@ export default function SubstitutionApp() {
       });
   };
 
-  // --- 匯入/匯出 ---
+  // --- CSV / Backup ---
   const handleCSVImport = (e, type) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -310,7 +352,8 @@ export default function SubstitutionApp() {
              if(!newTeachers.find(t => t.name === name)) newTeachers.push({ id: Date.now()+Math.random(), name, freePeriods:[], absences:0, substitutions:0, masterSchedule: scheduleMap[name], scheduleDetails: detailsMap[name] || {} });
           });
         }
-        setTeachers(newTeachers); showAlert("匯入成功", `已處理 ${count} 筆資料。`);
+        setTeachers(newTeachers); 
+        showAlert("匯入成功", `已處理 ${count} 筆資料。`);
       } catch (err) { showAlert("錯誤", "格式有誤"); }
       e.target.value = '';
     };
@@ -346,7 +389,7 @@ export default function SubstitutionApp() {
     reader.readAsText(file);
   };
 
-  // --- 視圖元件 ---
+  // --- Views ---
   const Modal = () => {
     if (!modal.isOpen) return null;
     return (
@@ -375,6 +418,16 @@ export default function SubstitutionApp() {
     );
   };
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
+        <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料...</h2>
+        <p className="text-gray-500 text-sm mt-2">若是初次使用，請稍候</p>
+      </div>
+    );
+  }
+
   const ArrangeView = () => {
     const list = getAvailableTeachers();
     const day = new Date(formDate).getDay();
@@ -393,10 +446,8 @@ export default function SubstitutionApp() {
     return (
       <div className="space-y-6">
         <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
-          {/* --- 這裡就是關鍵的修改：標題列 --- */}
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold text-purple-800 flex items-center"><Search className="mr-2" /> 安排代課</h2>
-            {/* 這裡已被移除，改移到 Navbar */}
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -559,10 +610,19 @@ export default function SubstitutionApp() {
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
              <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課</div>
-             {/* --- 這裡就是綠色標籤的新位置 --- */}
+             
              {isCloudEnabled ? 
-               <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端</span> : 
-               <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10"><CloudOff size={10} className="mr-1"/> 本機</span>
+               <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
+                 <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
+                   <Cloud size={10} className="mr-1"/> 雲端同步
+                 </span>
+                 {saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}
+                 {saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}
+               </div>
+               : 
+               <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。請檢查 Firebase Console 設定。")}>
+                 <CloudOff size={10} className="mr-1"/> 本機模式
+               </span>
              }
           </div>
           <div className="flex space-x-1">
