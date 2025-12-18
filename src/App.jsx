@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, GripHorizontal, FileWarning } from 'lucide-react';
-// 注意：即使沒有設定 firebaseConfig.js，保留這行 import 通常不會報錯
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 // --- 常數設定 ---
@@ -149,7 +148,7 @@ export default function SubstitutionApp() {
       setLastSaved(now);
       setSaveStatus('saved');
       setIsCloudEnabled(true);
-      alert("✅ V3.1 資料上傳成功！");
+      alert("✅ V3 資料上傳成功！");
     } catch (e) {
       setSaveStatus('error');
       alert(`❌ 上傳失敗: ${e.message}`);
@@ -216,12 +215,11 @@ export default function SubstitutionApp() {
     const absT = teachers.find(t => t.id == absentTeacherId);
     if (!subT || !absT) return showAlert("錯誤", "找不到老師資料");
 
-    // 1. 計算自動備註 (Auto Note)
+    // 計算自動備註
     let note = '';
     if (isExtracting) {
         const p = parseInt(selectedPeriod);
         const dayOfWeek = new Date(formDate).getDay();
-        // 查找該代課老師原本的支援課堂
         const detail = subT?.scheduleDetails?.[`${dayOfWeek}-${p}`];
         if (detail?.className) {
             note = `(${detail.className}不抽離)`;
@@ -242,7 +240,6 @@ export default function SubstitutionApp() {
     );
 
     showConfirm("確認安排", msg, () => {
-      // 更新統計
       setTeachers(prev => prev.map(t => {
         if (t.id == absentTeacherId) return { ...t, absences: (t.absences || 0) + 1 };
         if (t.id == subTeacherId) return { ...t, substitutions: (t.substitutions || 0) + 1 };
@@ -258,7 +255,7 @@ export default function SubstitutionApp() {
           absentId: absT.id, 
           subName: subT.name, 
           subId: subT.id, 
-          note: note, // 寫入備註
+          note: note,
           timestamp: new Date().toLocaleString() 
       }, ...logs];
       setLogs(newLogs);
@@ -309,13 +306,14 @@ export default function SubstitutionApp() {
     });
   };
 
-  // --- Drag and Drop (Fix: Click once to drag) ---
+  // --- Drag and Drop (FIXED V3.2) ---
   const handleDragStart = (e, logId) => {
-    // 延遲更新 State，確保瀏覽器有時間建立 Drag Snapshot
+    // 使用 setTimeout 確保拖曳快照產生後才更新 State
     setTimeout(() => {
         setDraggedLogId(logId);
     }, 0);
     e.dataTransfer.effectAllowed = "move";
+    // 設置文字資料確保兼容性
     e.dataTransfer.setData("text/plain", logId);
   };
 
@@ -325,16 +323,25 @@ export default function SubstitutionApp() {
   };
 
   const handleDragOver = (e, logId) => {
-    e.preventDefault();
+    e.preventDefault(); // 必須有，否則無法 Drop
     e.dataTransfer.dropEffect = "move";
     if (dragOverLogId !== logId) {
         setDragOverLogId(logId);
     }
   };
 
+  // 新增：處理拖曳離開目標 (防止誤判導致閃爍)
+  const handleTargetDragLeave = (e) => {
+    // 只有當真正離開格子 (relatedTarget 不在 currentTarget 內) 時才清除樣式
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+       setDragOverLogId(null);
+    }
+  };
+
   const handleDrop = (e, targetLogId) => {
     e.preventDefault();
     setDragOverLogId(null);
+    
     if (!draggedLogId || draggedLogId === targetLogId) return;
 
     const sourceLog = logs.find(l => l.id === draggedLogId);
@@ -342,15 +349,14 @@ export default function SubstitutionApp() {
 
     if (!sourceLog || !targetLog) return;
 
+    // 交換邏輯 (只換人與備註)
     const newLogs = logs.map(l => {
-      // 僅交換代課老師 (subName, subId) 與 備註 (note)
-      // 缺席老師 (absentName)、班級 (className)、節次 (period) 保持不變 (坑不變)
       if (l.id === draggedLogId) {
           return { 
               ...l, 
               subName: targetLog.subName, 
               subId: targetLog.subId,
-              note: targetLog.note // 交換備註
+              note: targetLog.note 
           };
       }
       if (l.id === targetLogId) {
@@ -358,7 +364,7 @@ export default function SubstitutionApp() {
               ...l, 
               subName: sourceLog.subName, 
               subId: sourceLog.subId,
-              note: sourceLog.note // 交換備註
+              note: sourceLog.note 
           };
       }
       return l;
@@ -368,7 +374,7 @@ export default function SubstitutionApp() {
     setDraggedLogId(null);
   };
 
-  // --- 核心演算法 (Fix: 防止分身) ---
+  // --- 核心演算法 (防止分身) ---
   const getAvailableTeachers = () => {
     if (!selectedPeriod || !absentTeacherId) return [];
     const p = parseInt(selectedPeriod);
@@ -379,7 +385,6 @@ export default function SubstitutionApp() {
 
     return teachers
       .map(t => {
-        // 計算今日已代課的節次
         const subbedPeriods = dailyLogs.filter(log => log.subId == t.id).map(log => log.period);
         const actualFreePeriods = (t.freePeriods || []).filter(fp => !subbedPeriods.includes(fp));
         return { ...t, actualFreePeriods, subbedPeriods };
@@ -387,7 +392,7 @@ export default function SubstitutionApp() {
       .filter(t => {
         if (t.id == absentTeacherId) return false; 
         
-        // --- 修正分身問題 ---
+        // 分身檢查：如果已在今日該節有代課，則排除
         if (t.subbedPeriods.includes(p)) return false;
 
         const isFree = t.actualFreePeriods.includes(p);
@@ -698,7 +703,7 @@ export default function SubstitutionApp() {
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3.1)</h2>
+          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3.2)</h2>
           <div className="flex items-center gap-2">
             <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 flex items-center">
               <GripHorizontal size={12} className="mr-1"/> 可拖曳互換代課
@@ -745,7 +750,7 @@ export default function SubstitutionApp() {
                           `}
                           onDragOver={(e) => log && handleDragOver(e, log.id)}
                           onDrop={(e) => log && handleDrop(e, log.id)}
-                          onDragLeave={handleDragEnd}
+                          onDragLeave={handleTargetDragLeave} 
                         >
                           {log ? (
                             <div 
@@ -797,7 +802,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.1)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.2)...</h2>
       </div>
     );
   }
@@ -808,7 +813,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.1</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.2</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
