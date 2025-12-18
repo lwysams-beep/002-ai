@@ -21,6 +21,7 @@ export default function SubstitutionApp() {
   const [saveStatus, setSaveStatus] = useState('idle');
 
   const [draggedLogId, setDraggedLogId] = useState(null);
+  const [dragOverLogId, setDragOverLogId] = useState(null); // 新增：用於顯示 Drop 目標樣式
   const dbRef = useRef(null);
 
   // 介面狀態
@@ -66,7 +67,6 @@ export default function SubstitutionApp() {
             loadedFromCloud = true;
             setIsCloudEnabled(true); 
           } else {
-            console.log("雲端無 V3 資料，嘗試初始化。");
             setIsCloudEnabled(true); 
           }
         } catch (error) {
@@ -149,7 +149,7 @@ export default function SubstitutionApp() {
       setLastSaved(now);
       setSaveStatus('saved');
       setIsCloudEnabled(true);
-      alert("✅ V3 資料上傳成功！");
+      alert("✅ V3.1 資料上傳成功！");
     } catch (e) {
       setSaveStatus('error');
       alert(`❌ 上傳失敗: ${e.message}`);
@@ -227,19 +227,51 @@ export default function SubstitutionApp() {
     );
 
     showConfirm("確認安排", msg, () => {
+      // 1. 更新資料庫與日誌
       setTeachers(prev => prev.map(t => {
         if (t.id == absentTeacherId) return { ...t, absences: (t.absences || 0) + 1 };
         if (t.id == subTeacherId) return { ...t, substitutions: (t.substitutions || 0) + 1 };
         return t;
       }));
-      setLogs(prev => [{ id: Date.now(), date: formDate, period: parseInt(selectedPeriod), className, absentName: absT.name, absentId: absT.id, subName: subT.name, subId: subT.id, timestamp: new Date().toLocaleString() }, ...prev]);
+      
+      const newLogs = [{ id: Date.now(), date: formDate, period: parseInt(selectedPeriod), className, absentName: absT.name, absentId: absT.id, subName: subT.name, subId: subT.id, timestamp: new Date().toLocaleString() }, ...logs];
+      setLogs(newLogs);
+      
       closeModal();
-      setClassName(''); setAbsentTeacherId(''); setSelectedPeriod('');
-      setTimeout(() => showAlert("成功", "已安排代課"), 100);
+      
+      // 2. 自動尋找該缺席老師的「下一節」缺課 (Smart Next)
+      const dayOfWeek = new Date(formDate).getDay();
+      const dailySchedule = absT.masterSchedule?.[dayOfWeek] || [];
+      
+      // 找出該師當天所有「已處理」的節次 (包含剛剛那一筆)
+      const coveredPeriods = newLogs
+        .filter(l => l.date === formDate && l.absentId == absentTeacherId)
+        .map(l => l.period);
+      
+      // 找出還沒處理的節次
+      const remainingPeriods = dailySchedule
+        .filter(p => !coveredPeriods.includes(p))
+        .sort((a,b) => a-b);
+      
+      const nextPeriod = remainingPeriods[0]; // 取第一個未處理的
+
+      if (nextPeriod) {
+        // 自動跳轉到下一節
+        setSelectedPeriod(nextPeriod);
+        const detail = absT.scheduleDetails?.[`${dayOfWeek}-${nextPeriod}`];
+        setClassName(detail?.className || '');
+        // 顯示輕微提示
+        setTimeout(() => showAlert("已安排", `已自動跳至 ${absT.name} 的下一節缺課 (第 ${nextPeriod} 節)`), 100);
+      } else {
+        // 如果都排完了，清空
+        setClassName(''); 
+        setAbsentTeacherId(''); 
+        setSelectedPeriod('');
+        setTimeout(() => showAlert("成功", "該老師今日課堂已全部安排完成！"), 100);
+      }
     });
   };
 
-  // --- 刪除紀錄並還原統計 (修正版) ---
   const deleteLog = (logId) => {
     const log = logs.find(l => l.id === logId);
     if (!log) return;
@@ -247,18 +279,12 @@ export default function SubstitutionApp() {
     showConfirm("確認刪除", "確定刪除此紀錄？\n\n系統將會自動：\n1. 扣減代課老師的「代課數」\n2. 扣減缺席老師的「缺課數」 (還原統計)", () => {
       setTeachers(prev => prev.map(t => {
         let changes = {};
-        // 1. 還原缺課老師的缺課數
-        // 使用 == 進行 ID 寬鬆比對 (字串/數字)
         if ((log.absentId && t.id == log.absentId) || (!log.absentId && t.name === log.absentName)) {
             changes.absences = Math.max(0, (t.absences || 0) - 1);
         }
-        
-        // 2. 還原代課老師的代課數
-        // 假如該紀錄曾經被 DragSwap 過，subId 會是最後那位代課老師的 ID，這是正確的
         if ((log.subId && t.id == log.subId) || (!log.subId && t.name === log.subName)) {
             changes.substitutions = Math.max(0, (t.substitutions || 0) - 1);
         }
-        
         return Object.keys(changes).length > 0 ? { ...t, ...changes } : t;
       }));
       
@@ -267,28 +293,32 @@ export default function SubstitutionApp() {
     });
   };
 
-  // --- Drag and Drop (修正點擊問題) ---
+  // --- Drag and Drop (Fix: Click once to drag) ---
   const handleDragStart = (e, logId) => {
-    // 關鍵修正：使用 setTimeout 延遲 State 更新，避免 React 重新渲染導致瀏覽器拖曳行為中斷
-    setTimeout(() => {
-        setDraggedLogId(logId);
-    }, 0);
-    
+    // 立即設定，不使用 setTimeout，但確保樣式不會導致重繪干擾
+    setDraggedLogId(logId);
     e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", logId); // 設置資料協助相容性
+    e.dataTransfer.setData("text/plain", logId);
+    // 建立一個透明的拖曳影像，避免預設影像擋住視線 (可選)
+    // const img = new Image(); img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; e.dataTransfer.setDragImage(img, 0, 0);
   };
 
   const handleDragEnd = () => {
     setDraggedLogId(null);
+    setDragOverLogId(null);
   };
 
-  const handleDragOver = (e) => {
+  const handleDragOver = (e, logId) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+    if (dragOverLogId !== logId) {
+        setDragOverLogId(logId);
+    }
   };
 
   const handleDrop = (e, targetLogId) => {
     e.preventDefault();
+    setDragOverLogId(null);
     if (!draggedLogId || draggedLogId === targetLogId) return;
 
     const sourceLog = logs.find(l => l.id === draggedLogId);
@@ -297,7 +327,6 @@ export default function SubstitutionApp() {
     if (!sourceLog || !targetLog) return;
 
     const newLogs = logs.map(l => {
-      // 僅交換代課老師資訊 (Sub Info)，不交換缺課者、班級、節次
       if (l.id === draggedLogId) return { ...l, subName: targetLog.subName, subId: targetLog.subId };
       if (l.id === targetLogId) return { ...l, subName: sourceLog.subName, subId: sourceLog.subId };
       return l;
@@ -307,6 +336,7 @@ export default function SubstitutionApp() {
     setDraggedLogId(null);
   };
 
+  // --- 核心演算法 (Fix: 防止分身) ---
   const getAvailableTeachers = () => {
     if (!selectedPeriod || !absentTeacherId) return [];
     const p = parseInt(selectedPeriod);
@@ -317,14 +347,23 @@ export default function SubstitutionApp() {
 
     return teachers
       .map(t => {
+        // 計算今日已代課的節次
         const subbedPeriods = dailyLogs.filter(log => log.subId == t.id).map(log => log.period);
         const actualFreePeriods = (t.freePeriods || []).filter(fp => !subbedPeriods.includes(fp));
         return { ...t, actualFreePeriods, subbedPeriods };
       })
       .filter(t => {
-        if (t.id == absentTeacherId) return false;
+        if (t.id == absentTeacherId) return false; // 排除自己
+        
+        // --- 修正分身問題 ---
+        // 如果該老師在這一節已經有代課任務 (在 subbedPeriods 裡)，絕對不能再選
+        if (t.subbedPeriods.includes(p)) return false;
+
+        // 條件：有空堂 OR 是支援老師
         const isFree = t.actualFreePeriods.includes(p);
         const isSupport = t.scheduleDetails?.[targetKey]?.isSupport === true;
+        
+        // 即使是支援老師，如果已經被抓去代別班了 (subbedPeriods check above)，這裡就不會顯示
         return isFree || isSupport;
       })
       .map(t => {
@@ -434,7 +473,7 @@ export default function SubstitutionApp() {
     reader.readAsText(file);
   };
 
-  // --- Render Functions (避免 Focus Loss) ---
+  // --- Render Functions ---
   
   const renderModal = () => {
     if (!modal.isOpen) return null;
@@ -631,7 +670,7 @@ export default function SubstitutionApp() {
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3)</h2>
+          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3.1)</h2>
           <div className="flex items-center gap-2">
             <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 flex items-center">
               <GripHorizontal size={12} className="mr-1"/> 可拖曳互換代課
@@ -667,18 +706,29 @@ export default function SubstitutionApp() {
                     </td>
                     {absentCols.map(col => {
                       const log = getCellData(period, col.id);
+                      const isDragged = draggedLogId === log?.id && log;
+                      const isOver = dragOverLogId === log?.id && log && log.id !== draggedLogId;
+
                       return (
                         <td 
                           key={`${period}-${col.id}`} 
                           className={`p-2 border-r border-purple-100 text-center relative transition-colors
-                            ${draggedLogId === log?.id && log ? 'opacity-50 bg-orange-100' : ''}
+                            ${isOver ? 'bg-blue-100 border-2 border-blue-400' : ''}
                           `}
-                          onDragOver={handleDragOver}
+                          onDragOver={(e) => log && handleDragOver(e, log.id)}
                           onDrop={(e) => log && handleDrop(e, log.id)}
+                          onDragLeave={handleDragEnd}
                         >
                           {log ? (
                             <div 
-                              className="bg-white border border-purple-200 rounded-lg p-2 shadow-sm cursor-grab active:cursor-grabbing hover:shadow-md hover:border-purple-400 group select-none"
+                              className={`
+                                rounded-lg p-2 shadow-sm cursor-grab active:cursor-grabbing border
+                                group select-none transition-all duration-200 relative
+                                ${isDragged 
+                                  ? 'bg-yellow-100 border-yellow-400 opacity-50 scale-95' 
+                                  : 'bg-white border-purple-200 hover:shadow-md hover:border-purple-400 hover:-translate-y-0.5'
+                                }
+                              `}
                               draggable
                               onDragStart={(e) => handleDragStart(e, log.id)}
                               onDragEnd={handleDragEnd}
@@ -688,10 +738,10 @@ export default function SubstitutionApp() {
                               
                               <button 
                                 onClick={(e) => { e.stopPropagation(); deleteLog(log.id); }}
-                                className="absolute -top-1 -right-1 bg-red-100 text-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 hover:bg-red-200 transition-opacity shadow-sm"
+                                className="absolute -top-2 -right-2 bg-red-100 text-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 hover:bg-red-200 transition-opacity shadow-sm z-20"
                                 title="刪除"
                               >
-                                <X size={10} />
+                                <X size={12} />
                               </button>
                             </div>
                           ) : (
@@ -714,7 +764,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.1)...</h2>
       </div>
     );
   }
@@ -725,7 +775,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.1</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
