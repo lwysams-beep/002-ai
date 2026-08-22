@@ -34,6 +34,7 @@ export default function SubstitutionApp() {
   const teacherImportRef = useRef(null);
   const timetableImportRef = useRef(null);
   const backupImportRef = useRef(null);
+  const sortImportRef = useRef(null); // 用於匯入排序
 
   const [modal, setModal] = useState({ isOpen: false, type: 'info', title: '', message: '', onConfirm: null });
 
@@ -187,7 +188,13 @@ export default function SubstitutionApp() {
   };
 
   // --- Helpers ---
-  const getSortedTeachers = (list) => [...list].sort((a, b) => a.name.localeCompare(b.name, "zh-HK"));
+  const getSortedTeachers = (list) => [...list].sort((a, b) => {
+    const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
+    const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
+    if (orderA !== orderB) return orderA - orderB;
+    return a.name.localeCompare(b.name, "zh-HK");
+  });
+
   const showAlert = (title, message) => setModal({ isOpen: true, type: 'info', title, message });
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
@@ -196,7 +203,7 @@ export default function SubstitutionApp() {
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
-      setTeachers([...teachers, { id: Date.now(), name: newName, freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} }]);
+      setTeachers([...teachers, { id: Date.now(), name: newName, freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
       setNewName('');
     }
   };
@@ -306,14 +313,12 @@ export default function SubstitutionApp() {
     });
   };
 
-  // --- Drag and Drop (FIXED V3.2) ---
+  // --- Drag and Drop ---
   const handleDragStart = (e, logId) => {
-    // 使用 setTimeout 確保拖曳快照產生後才更新 State
     setTimeout(() => {
         setDraggedLogId(logId);
     }, 0);
     e.dataTransfer.effectAllowed = "move";
-    // 設置文字資料確保兼容性
     e.dataTransfer.setData("text/plain", logId);
   };
 
@@ -323,16 +328,14 @@ export default function SubstitutionApp() {
   };
 
   const handleDragOver = (e, logId) => {
-    e.preventDefault(); // 必須有，否則無法 Drop
+    e.preventDefault(); 
     e.dataTransfer.dropEffect = "move";
     if (dragOverLogId !== logId) {
         setDragOverLogId(logId);
     }
   };
 
-  // 新增：處理拖曳離開目標 (防止誤判導致閃爍)
   const handleTargetDragLeave = (e) => {
-    // 只有當真正離開格子 (relatedTarget 不在 currentTarget 內) 時才清除樣式
     if (!e.currentTarget.contains(e.relatedTarget)) {
        setDragOverLogId(null);
     }
@@ -349,7 +352,6 @@ export default function SubstitutionApp() {
 
     if (!sourceLog || !targetLog) return;
 
-    // 交換邏輯 (只換人與備註)
     const newLogs = logs.map(l => {
       if (l.id === draggedLogId) {
           return { 
@@ -421,11 +423,66 @@ export default function SubstitutionApp() {
         if (a.actualFreePeriods.length !== b.actualFreePeriods.length) return b.actualFreePeriods.length - a.actualFreePeriods.length;
         if ((a.substitutions || 0) !== (b.substitutions || 0)) return (a.substitutions || 0) - (b.substitutions || 0);
         if ((a.absences || 0) !== (b.absences || 0)) return (b.absences || 0) - (a.absences || 0);
+        
+        const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
+        const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
+        if (orderA !== orderB) return orderA - orderB;
+        
         return a.name.localeCompare(b.name, "zh-HK");
       });
   };
 
-  // --- CSV / Backup ---
+  // --- CSV / Backup / Sort Import ---
+  const handleSortImport = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const rows = ev.target.result.split('\n').map(r => r.trim()).filter(r => r);
+        const sortNames = rows.map(row => {
+           const cols = row.split(',');
+           return cols.length >= 2 ? cols[1].trim() : cols[0].trim();
+        }).filter(n => n);
+
+        setTeachers(prev => {
+          let newTeachers = [...prev];
+          newTeachers.forEach(t => {
+             const idx = sortNames.indexOf(t.name);
+             t.sortOrder = idx >= 0 ? idx : 9999;
+          });
+          newTeachers.sort((a, b) => {
+             const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
+             const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
+             if (orderA !== orderB) return orderA - orderB;
+             return a.name.localeCompare(b.name, "zh-HK");
+          });
+          newTeachers.forEach((t, i) => t.sortOrder = i);
+          return newTeachers;
+        });
+        showAlert("成功", "老師排序已成功匯入！");
+      } catch (err) { showAlert("錯誤", "排序匯入失敗，請檢查格式。"); }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  const moveTeacher = (index, direction) => {
+    setTeachers(prev => {
+      let newTeachers = getSortedTeachers(prev);
+      if (direction === 'up' && index > 0) {
+        const temp = newTeachers[index - 1];
+        newTeachers[index - 1] = newTeachers[index];
+        newTeachers[index] = temp;
+      } else if (direction === 'down' && index < newTeachers.length - 1) {
+        const temp = newTeachers[index + 1];
+        newTeachers[index + 1] = newTeachers[index];
+        newTeachers[index] = temp;
+      }
+      newTeachers.forEach((t, i) => t.sortOrder = i);
+      return newTeachers;
+    });
+  };
+
   const handleCSVImport = (e, type) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -441,7 +498,7 @@ export default function SubstitutionApp() {
              const name = cols[0].trim();
              const idx = newTeachers.findIndex(t => t.name === name);
              if(idx >= 0) newTeachers[idx] = {...newTeachers[idx], absences: parseInt(cols[1])||0, substitutions: parseInt(cols[2])||0};
-             else newTeachers.push({id: Date.now()+i, name, absences: parseInt(cols[1])||0, substitutions: parseInt(cols[2])||0, freePeriods:[], masterSchedule:{}, scheduleDetails:{}});
+             else newTeachers.push({id: Date.now()+i, name, absences: parseInt(cols[1])||0, substitutions: parseInt(cols[2])||0, freePeriods:[], masterSchedule:{}, scheduleDetails:{}, sortOrder: 9999});
              count++;
           }
         } else if (type === 'timetable') {
@@ -459,7 +516,7 @@ export default function SubstitutionApp() {
           }
           newTeachers = newTeachers.map(t => (scheduleMap[t.name] ? { ...t, masterSchedule: scheduleMap[t.name], scheduleDetails: detailsMap[t.name] || {} } : t));
           Object.keys(scheduleMap).forEach(name => {
-             if(!newTeachers.find(t => t.name === name)) newTeachers.push({ id: Date.now()+Math.random(), name, freePeriods:[], absences:0, substitutions:0, masterSchedule: scheduleMap[name], scheduleDetails: detailsMap[name] || {} });
+             if(!newTeachers.find(t => t.name === name)) newTeachers.push({ id: Date.now()+Math.random(), name, freePeriods:[], absences:0, substitutions:0, masterSchedule: scheduleMap[name], scheduleDetails: detailsMap[name] || {}, sortOrder: 9999 });
           });
         }
         setTeachers(newTeachers); showAlert("匯入成功", `已處理 ${count} 筆資料。請手動上傳雲端保存。`);
@@ -632,6 +689,8 @@ export default function SubstitutionApp() {
       <div className="flex flex-wrap justify-between items-center gap-2">
         <h2 className="text-xl font-bold text-purple-800 flex items-center"><UserCheck className="mr-2"/> 教師設定</h2>
         <div className="flex gap-2">
+          <button onClick={() => sortImportRef.current.click()} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm shadow hover:bg-green-700 flex items-center"><Upload size={14} className="mr-1"/> 匯入排序</button>
+          <input type="file" ref={sortImportRef} onChange={handleSortImport} className="hidden" />
           <button onClick={downloadTimetableTemplate} className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm border border-purple-200 hover:bg-purple-100"><Download size={14} className="inline mr-1"/>範本</button>
           <button onClick={() => timetableImportRef.current.click()} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm shadow hover:bg-purple-700"><FileText size={14} className="inline mr-1"/>匯入課表</button>
           <button onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center"><Upload size={14} className="mr-1"/> 手動上傳雲端</button>
@@ -644,9 +703,16 @@ export default function SubstitutionApp() {
       </form>
       <div className="overflow-x-auto rounded-xl border border-purple-100">
         <table className="w-full text-sm">
-          <thead className="bg-purple-50 text-purple-900"><tr><th className="p-3 text-left">姓名</th><th className="p-3 text-left">當日空堂</th><th className="p-3">刪除</th></tr></thead>
-          <tbody className="divide-y divide-purple-50">{getSortedTeachers(teachers).map(t => (
-          <tr key={t.id} className="hover:bg-purple-50 bg-white"><td className="p-3 font-medium">{t.name}</td>
+          <thead className="bg-purple-50 text-purple-900"><tr><th className="p-3 text-center w-16">排序</th><th className="p-3 text-left">姓名</th><th className="p-3 text-left">當日空堂</th><th className="p-3 text-center">刪除</th></tr></thead>
+          <tbody className="divide-y divide-purple-50">{getSortedTeachers(teachers).map((t, index) => (
+          <tr key={t.id} className="hover:bg-purple-50 bg-white">
+          <td className="p-3">
+             <div className="flex flex-col gap-1 items-center justify-center">
+                <button type="button" onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button>
+                <button type="button" onClick={() => moveTeacher(index, 'down')} disabled={index===teachers.length-1} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
+             </div>
+          </td>
+          <td className="p-3 font-medium">{t.name}</td>
           <td className="p-3 flex flex-wrap gap-1">{PERIODS.map(p => <button key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${t.freePeriods.includes(p)?'bg-green-100 text-green-700 border border-green-300 font-bold':'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>)}</td>
           <td className="p-3 text-center"><button onClick={()=>deleteTeacher(t.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button></td></tr>
         ))}</tbody></table>
@@ -703,7 +769,7 @@ export default function SubstitutionApp() {
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3.2)</h2>
+          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3.3)</h2>
           <div className="flex items-center gap-2">
             <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 flex items-center">
               <GripHorizontal size={12} className="mr-1"/> 可拖曳互換代課
@@ -802,7 +868,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.2)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.3)...</h2>
       </div>
     );
   }
@@ -813,7 +879,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.2</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.3</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
