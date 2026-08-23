@@ -111,7 +111,16 @@ export default function SubstitutionApp() {
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
 
-  // V5.0 防呆排序：確保每個物件都不是 null，避免讀取屬性時崩潰
+  // V5.1 補回遺失的手動上傳函數
+  const handleManualCloudUpload = async () => {
+    if (!isCloudEnabled || !dbRef.current) return showAlert("提示", "目前為本機模式，無法上傳雲端。");
+    setSaveStatus('saving');
+    try {
+      await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), { teachers, logs, lastUpdated: new Date().toISOString() });
+      setLastSaved(new Date()); setSaveStatus('idle'); showAlert("成功", "資料已成功上傳！");
+    } catch (e) { setSaveStatus('error'); showAlert("錯誤", "上傳失敗。"); }
+  };
+
   const getSortedTeachers = (list) => {
     if (!Array.isArray(list)) return [];
     return [...list].filter(t => t !== null && t !== undefined).sort((a, b) => {
@@ -312,24 +321,35 @@ export default function SubstitutionApp() {
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
-      setTeachers(prev => [...(Array.isArray(prev)?prev:[]), { id: Date.now(), title: newTitle.trim(), name: newName.trim(), freePeriods: [], masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
+      setTeachers(prev => {
+        const safePrev = Array.isArray(prev) ? prev : [];
+        return [...safePrev, { id: Date.now(), title: newTitle.trim(), name: newName.trim(), freePeriods: [], masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }];
+      });
       setNewTitle(''); setNewName('');
     }
   };
 
-  const deleteTeacher = (id) => showConfirm("刪除確認", "確定要刪除這位老師嗎？", () => {
-    setTeachers(prev => (Array.isArray(prev)?prev:[]).filter(t => t.id !== id));
-    closeModal();
-  });
+  const deleteTeacher = (id) => {
+    showConfirm("刪除確認", "確定要刪除這位老師嗎？", () => {
+      setTeachers(prev => {
+         const safePrev = Array.isArray(prev) ? prev : [];
+         return safePrev.filter(t => t && String(t.id) !== String(id));
+      });
+      closeModal();
+    });
+  };
   
   const toggleFreePeriod = (teacherId, period) => {
-    setTeachers(prev => (Array.isArray(prev)?prev:[]).map(t => {
-      if (t.id === teacherId) {
-        const fp = Array.isArray(t.freePeriods) ? t.freePeriods : [];
-        return { ...t, freePeriods: fp.includes(period) ? fp.filter(p => p !== period) : [...fp, period].sort((a, b) => a - b) };
-      }
-      return t;
-    }));
+    setTeachers(prev => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      return safePrev.map(t => {
+        if (t && String(t.id) === String(teacherId)) {
+          const fp = Array.isArray(t.freePeriods) ? t.freePeriods : [];
+          return { ...t, freePeriods: fp.includes(period) ? fp.filter(p => p !== period) : [...fp, period].sort((a, b) => a - b) };
+        }
+        return t;
+      });
+    });
   };
 
   const handleSortImport = (e) => {
@@ -344,7 +364,7 @@ export default function SubstitutionApp() {
         }).filter(item => item.name);
 
         setTeachers(prev => {
-          let newTeachers = [...(Array.isArray(prev)?prev:[])];
+          let newTeachers = [...(Array.isArray(prev)?prev:[])].filter(t => t !== null);
           newTeachers.forEach(t => {
              const found = sortData.find(s => s.name === t.name);
              if (found) { t.sortOrder = sortData.indexOf(found); t.title = found.title || t.title; } 
@@ -385,7 +405,7 @@ export default function SubstitutionApp() {
     reader.onload = async (ev) => {
       try {
         const rows = ev.target.result.split('\n').map(r => r.trim()).filter(r => r);
-        let newTeachers = [...(Array.isArray(teachers)?teachers:[])];
+        let newTeachers = [...(Array.isArray(teachers)?teachers:[])].filter(t => t !== null);
         if (type === 'timetable') {
           const scheduleMap = {}; const detailsMap = {};
           for (let i=1; i<rows.length; i++) {
@@ -428,34 +448,12 @@ export default function SubstitutionApp() {
     reader.readAsText(file);
   };
 
-  const handleManualCloudUpload = async () => {
-    if (!isCloudEnabled || !dbRef.current) {
-      return showAlert("提示", "目前為本機模式或無 Firebase 設定，無法手動上傳雲端。");
-    }
-    try {
-      setSaveStatus('saving');
-      const safeTeachers = Array.isArray(teachers) ? teachers : [];
-      const safeLogs = Array.isArray(logs) ? logs : [];
-      await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
-        teachers: safeTeachers,
-        logs: safeLogs,
-        lastUpdated: new Date().toISOString()
-      });
-      setLastSaved(new Date());
-      setSaveStatus('idle');
-      showAlert("成功", "資料已手動同步至雲端！");
-    } catch (e) {
-      setSaveStatus('error');
-      showAlert("錯誤", "手動上傳雲端失敗。");
-    }
-  };
-
   const exportStatsToCSV = () => {
     const monthLogs = (Array.isArray(logs)?logs:[]).filter(l => (l?.date || '').startsWith(statsMonth));
     let csv = `\ufeff職銜,姓名,${statsMonth} 缺課,${statsMonth} 代課,淨值\n`;
     getSortedTeachers(teachers).forEach(t => {
-      const monthAbs = monthLogs.filter(l => l?.absentId === t.id).length;
-      const monthSubs = monthLogs.filter(l => l?.subId === t.id && l?.subId !== 'CANCELLED' && !l?.isSwap).length; 
+      const monthAbs = monthLogs.filter(l => String(l?.absentId) === String(t.id)).length;
+      const monthSubs = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.subId !== 'CANCELLED' && !l?.isSwap).length; 
       csv += `${t?.title||''},${t?.name||''},${monthAbs},${monthSubs},${monthSubs - monthAbs}\n`;
     });
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
@@ -552,9 +550,9 @@ export default function SubstitutionApp() {
   const renderArrangeView = () => {
     const safeLogs = Array.isArray(logs) ? logs : [];
     const dailyLogs = safeLogs.filter(l => l?.date === formDate);
-    const uniqueAbsentIds = [...new Set(dailyLogs.map(l => l?.absentId))].filter(Boolean);
+    const uniqueAbsentIds = [...new Set(dailyLogs.map(l => String(l?.absentId)))].filter(Boolean);
     const absentCols = uniqueAbsentIds.map(id => {
-      const log = dailyLogs.find(l => l?.absentId === id);
+      const log = dailyLogs.find(l => String(l?.absentId) === id);
       return { id, name: log?.absentName || '未知', reason: log?.reason || '其他' };
     });
     
@@ -598,7 +596,7 @@ export default function SubstitutionApp() {
                     <div className="flex flex-wrap gap-2 items-center bg-red-50 p-2 rounded-lg border border-red-100 text-sm">
                         <span className="font-bold text-red-800 text-xs">缺席名單:</span>
                         {uniqueAbsentIds.map(id => {
-                           const cName = absentCols.find(c => c.id === id)?.name || '未知';
+                           const cName = absentCols.find(c => String(c.id) === id)?.name || '未知';
                            return (
                              <span key={id} className="bg-white text-red-700 px-2 py-1 rounded shadow-sm border border-red-100 flex items-center gap-1 text-xs font-medium">
                                {cName}
@@ -625,7 +623,7 @@ export default function SubstitutionApp() {
                      <tr key={p} className="hover:bg-purple-50/30">
                        <td className="p-2 border-b border-r border-gray-200 font-bold bg-white text-purple-800 sticky left-0 z-10">{p}</td>
                        {absentCols.map(c => {
-                          const log = dailyLogs.find(l => l.absentId === c.id && l.period === p);
+                          const log = dailyLogs.find(l => String(l.absentId) === String(c.id) && l.period === p);
                           const isActive = activeCell?.logId === log?.id;
                           if (!log) return <td key={c.id} className="p-2 border-b border-gray-200 bg-gray-50 text-gray-300">-</td>;
                           const isCancelled = log.subId === 'CANCELLED';
@@ -668,18 +666,21 @@ export default function SubstitutionApp() {
           <table className="w-full text-sm">
             <thead className="bg-purple-50 text-purple-900"><tr><th className="p-3 text-center w-16">排序</th><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-left">當日空堂</th><th className="p-3 text-center">刪除</th></tr></thead>
             <tbody className="divide-y divide-purple-50">
-              {(getSortedTeachers(teachers) || []).map((t, index) => (
-                <tr key={t?.id || index} className="hover:bg-purple-50 bg-white">
-                  <td className="p-3 text-center">
-                    <div className="flex flex-col gap-1 items-center justify-center">
-                      <button onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button><button onClick={() => moveTeacher(index, 'down')} disabled={index===((getSortedTeachers(teachers)||[]).length-1)} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
-                    </div>
-                  </td>
-                  <td className="p-3 text-gray-500 font-medium text-xs">{t?.title || '-'}</td><td className="p-3 font-medium">{t?.name || '未知'}</td>
-                  <td className="p-3 flex flex-wrap gap-1">{PERIODS.map(p => ( <button key={p} onClick={()=>toggleFreePeriod(t?.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t?.freePeriods || []).includes(p) ? 'bg-green-100 text-green-700 border border-green-300 font-bold' : 'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button> ))}</td>
-                  <td className="p-3 text-center"><button onClick={()=>deleteTeacher(t?.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button></td>
-                </tr>
-              ))}
+              {(getSortedTeachers(teachers) || []).map((t, index) => {
+                if (!t) return null;
+                return (
+                  <tr key={t.id || index} className="hover:bg-purple-50 bg-white">
+                    <td className="p-3 text-center">
+                      <div className="flex flex-col gap-1 items-center justify-center">
+                        <button onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button><button onClick={() => moveTeacher(index, 'down')} disabled={index===((getSortedTeachers(teachers)||[]).length-1)} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
+                      </div>
+                    </td>
+                    <td className="p-3 text-gray-500 font-medium text-xs">{t.title || '-'}</td><td className="p-3 font-medium">{t.name || '未知'}</td>
+                    <td className="p-3 flex flex-wrap gap-1">{PERIODS.map(p => ( <button key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t.freePeriods || []).includes(p) ? 'bg-green-100 text-green-700 border border-green-300 font-bold' : 'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button> ))}</td>
+                    <td className="p-3 text-center"><button onClick={()=>deleteTeacher(t.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button></td>
+                  </tr>
+                );
+              })}
               {(!teachers || teachers.length === 0) && <tr><td colSpan="5" className="p-6 text-center text-gray-400">目前沒有教師資料</td></tr>}
             </tbody>
           </table>
@@ -691,10 +692,11 @@ export default function SubstitutionApp() {
   const renderStatsView = () => {
     const monthLogs = (Array.isArray(logs)?logs:[]).filter(l => (l?.date || '').startsWith(statsMonth));
     const statsData = getSortedTeachers(teachers).map(t => {
-      const monthAbs = monthLogs.filter(l => l?.absentId === t?.id).length;
-      const monthSubs = monthLogs.filter(l => l?.subId === t?.id && l?.subId !== 'CANCELLED' && !l?.isSwap).length;
+      if(!t) return null;
+      const monthAbs = monthLogs.filter(l => String(l?.absentId) === String(t.id)).length;
+      const monthSubs = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.subId !== 'CANCELLED' && !l?.isSwap).length;
       return { ...t, monthAbs, monthSubs };
-    });
+    }).filter(Boolean);
     return (
       <div className="space-y-6 animate-in fade-in zoom-in duration-300">
         <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100">
@@ -734,7 +736,7 @@ export default function SubstitutionApp() {
 
   const renderReportView = () => {
     const dailyLogs = (Array.isArray(logs)?logs:[]).filter(l => l?.date === formDate).sort((a,b) => (a?.period||0) - (b?.period||0));
-    const uniqueAbsents = [...new Set(dailyLogs.map(l => l?.absentName))].filter(Boolean);
+    const uniqueAbsents = [...new Set(dailyLogs.map(l => String(l?.absentId)))].filter(Boolean);
 
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
@@ -751,9 +753,10 @@ export default function SubstitutionApp() {
                 <span>今日缺席名單 ({uniqueAbsents.length}人)</span>
               </h3>
               <div className="flex flex-wrap gap-2">
-                {uniqueAbsents.map(name => {
-                   const reason = dailyLogs.find(l => l?.absentName === name)?.reason || '其他';
-                   return <span key={name} className="bg-white text-red-700 px-3 py-1.5 rounded-lg shadow-sm font-medium border border-red-100">{name} <span className="text-xs text-gray-500 ml-1">({reason})</span></span>;
+                {uniqueAbsents.map(id => {
+                   const cName = dailyLogs.find(l => String(l.absentId) === id)?.absentName || '未知';
+                   const reason = dailyLogs.find(l => String(l.absentId) === id)?.reason || '其他';
+                   return <span key={id} className="bg-white text-red-700 px-3 py-1.5 rounded-lg shadow-sm font-medium border border-red-100">{cName} <span className="text-xs text-gray-500 ml-1">({reason})</span></span>;
                 })}
                 {uniqueAbsents.length === 0 && <span className="text-gray-400 text-sm">本日無缺席紀錄</span>}
               </div>
@@ -780,7 +783,7 @@ export default function SubstitutionApp() {
     );
   };
 
-  if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.9)...</h2></div>);
+  if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料 (V5.1)...</h2></div>);
 
   return (
     <div className="min-h-screen bg-fuchsia-50 font-sans text-gray-800 pb-10 selection:bg-fuchsia-200">
@@ -789,7 +792,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.9</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V5.1</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
