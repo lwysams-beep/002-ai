@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, FileWarning } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, GripHorizontal, FileWarning } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 // --- 常數設定 ---
@@ -100,7 +100,9 @@ export default function SubstitutionApp() {
       if (isCloudEnabled && dbRef.current) {
         try {
           await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
-            teachers, logs, lastUpdated: new Date().toISOString()
+            teachers: teachers, 
+            logs: logs, 
+            lastUpdated: new Date().toISOString()
           });
           setLastSaved(new Date());
         } catch (e) {}
@@ -109,13 +111,18 @@ export default function SubstitutionApp() {
     return () => clearTimeout(timer);
   }, [teachers, logs, isCloudEnabled, isLoading]);
 
-  // --- Helpers ---
-  const getSortedTeachers = (list) => [...list].sort((a, b) => {
-    const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
-    const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
-    if (orderA !== orderB) return orderA - orderB;
-    return (a.name || '').localeCompare(b.name || '', "zh-HK");
-  });
+  // --- 極強防呆排序 ---
+  const getSortedTeachers = (list) => {
+    if (!Array.isArray(list)) return [];
+    return [...list].sort((a, b) => {
+      const orderA = (a && a.sortOrder !== undefined) ? a.sortOrder : 9999;
+      const orderB = (b && b.sortOrder !== undefined) ? b.sortOrder : 9999;
+      if (orderA !== orderB) return orderA - orderB;
+      const nameA = a?.name || '';
+      const nameB = b?.name || '';
+      return nameA.localeCompare(nameB, "zh-HK");
+    });
+  };
 
   const showAlert = (title, message) => setModal({ isOpen: true, type: 'info', title, message });
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
@@ -127,8 +134,9 @@ export default function SubstitutionApp() {
   const handleAddAbsent = () => {
     if (!newAbsentId) return showAlert("提示", "請選擇缺席老師");
     const t = teachers.find(x => x.id == newAbsentId);
+    if (!t) return;
     const dayOfWeek = new Date(formDate).getDay();
-    const busy = t?.masterSchedule?.[dayOfWeek] || [];
+    const busy = t.masterSchedule?.[dayOfWeek] || [];
     const existing = logs.filter(l => l.date === formDate && l.absentId == newAbsentId).map(l => l.period);
     
     const newLogs = [];
@@ -139,7 +147,7 @@ export default function SubstitutionApp() {
           date: formDate,
           period: p,
           className: t.scheduleDetails?.[`${dayOfWeek}-${p}`]?.className || '',
-          absentName: t.name,
+          absentName: t.name || '未知',
           absentId: t.id,
           reason: newAbsentReason,
           subName: null,
@@ -160,19 +168,19 @@ export default function SubstitutionApp() {
     const p = activeCell.period;
     const dayOfWeek = new Date(formDate).getDay();
     const targetKey = `${dayOfWeek}-${p}`; 
-    const normClass = activeCell.className?.trim().toUpperCase();
+    const normClass = (activeCell.className || '').trim().toUpperCase();
     const dailyLogs = logs.filter(l => l.date === formDate);
 
     return teachers
       .map(t => {
         const subbedPeriods = dailyLogs.filter(log => log.subId == t.id).map(log => log.period);
         const actualFreePeriods = (t.freePeriods || []).filter(fp => !subbedPeriods.includes(fp));
-        const dailySubCount = subbedPeriods.length; // 計算今日已代課節數
+        const dailySubCount = subbedPeriods.length;
         return { ...t, actualFreePeriods, subbedPeriods, dailySubCount };
       })
       .filter(t => {
         if (t.id == activeCell.absentId) return false; 
-        if (t.subbedPeriods.includes(p)) return false; // 同一節已被指派
+        if (t.subbedPeriods.includes(p)) return false; 
         const isFree = t.actualFreePeriods.includes(p);
         const isSupport = t.scheduleDetails?.[targetKey]?.isSupport === true;
         return isFree || isSupport;
@@ -185,23 +193,20 @@ export default function SubstitutionApp() {
         let isCore = false; let coreSub = "";
         if (normClass && t.scheduleDetails) {
            const cls = Object.values(t.scheduleDetails).find(c => 
-             c.className?.toUpperCase() === normClass && 
-             CORE_SUBJECTS.some(sub => (c.subject || '').toUpperCase().includes(sub))
+             (c?.className || '').toUpperCase() === normClass && 
+             CORE_SUBJECTS.some(sub => (c?.subject || '').toUpperCase().includes(sub))
            );
            if(cls) { isCore = true; coreSub = cls.subject; }
         }
         return { ...t, isExtractable: isSupport, supportClass, isPriorityTarget, isCore, coreSub };
       })
       .sort((a, b) => {
-        // 1. 公平原則：每日代課節數少的優先
         if (a.dailySubCount !== b.dailySubCount) return a.dailySubCount - b.dailySubCount;
-        // 2. 抽離與主科優先
         if (a.isPriorityTarget !== b.isPriorityTarget) return a.isPriorityTarget ? -1 : 1;
         if (a.isExtractable !== b.isExtractable) return a.isExtractable ? -1 : 1;
         if (a.isCore !== b.isCore) return a.isCore ? -1 : 1;
-        // 3. 空堂數多優先
         if (a.actualFreePeriods.length !== b.actualFreePeriods.length) return b.actualFreePeriods.length - a.actualFreePeriods.length;
-        // 4. 固定排序
+        
         const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
         const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
         if (orderA !== orderB) return orderA - orderB;
@@ -218,7 +223,6 @@ export default function SubstitutionApp() {
         const detail = subT?.scheduleDetails?.[`${dayOfWeek}-${p}`];
         note = detail?.className ? `(${detail.className}不抽離)` : `(支援課堂不抽離)`;
     }
-    
     setLogs(prev => prev.map(l => l.id === activeCell.logId ? { ...l, subId: subT.id, subName: subT.name, note } : l));
     setActiveCell(null);
   };
@@ -237,17 +241,19 @@ export default function SubstitutionApp() {
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
-      setTeachers([...teachers, { id: Date.now(), title: newTitle.trim(), name: newName.trim(), freePeriods: [], masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
+      setTeachers(prev => [...prev, { id: Date.now(), title: newTitle.trim(), name: newName.trim(), freePeriods: [], masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
       setNewTitle(''); setNewName('');
     }
   };
-  const deleteTeacher = (id) => showConfirm("刪除確認", "確定要刪除這位老師嗎？", () => setTeachers(teachers.filter(t => t.id !== id)).then(closeModal));
+  const deleteTeacher = (id) => showConfirm("刪除確認", "確定要刪除這位老師嗎？", () => {
+    setTeachers(prev => prev.filter(t => t.id !== id));
+    closeModal();
+  });
   
-  // 防呆：確保 freePeriods 為陣列
   const toggleFreePeriod = (teacherId, period) => {
     setTeachers(prev => prev.map(t => {
       if (t.id === teacherId) {
-        const fp = t.freePeriods || [];
+        const fp = Array.isArray(t.freePeriods) ? t.freePeriods : [];
         return { ...t, freePeriods: fp.includes(period) ? fp.filter(p => p !== period) : [...fp, period].sort((a, b) => a - b) };
       }
       return t;
@@ -271,7 +277,7 @@ export default function SubstitutionApp() {
           newTeachers.forEach(t => {
              const found = sortData.find(s => s.name === t.name);
              if (found) { t.sortOrder = sortData.indexOf(found); t.title = found.title || t.title; } 
-             else t.sortOrder = 9999;
+             else { t.sortOrder = 9999; }
           });
           newTeachers.sort((a, b) => {
              const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
@@ -319,7 +325,7 @@ export default function SubstitutionApp() {
              if(!scheduleMap[name][day]) scheduleMap[name][day] = [];
              if(!scheduleMap[name][day].includes(period)) scheduleMap[name][day].push(period);
              if(!detailsMap[name]) detailsMap[name] = {};
-             detailsMap[name][`${day}-${period}`] = { className: cols[3]?.trim().toUpperCase(), subject: cols[4]?.trim(), isSupport: ['是','y','yes'].includes(cols[5]?.trim().toLowerCase()) };
+             detailsMap[name][`${day}-${period}`] = { className: (cols[3]||'').trim().toUpperCase(), subject: (cols[4]||'').trim(), isSupport: ['是','y','yes'].includes((cols[5]||'').trim().toLowerCase()) };
           }
           newTeachers = newTeachers.map(t => (scheduleMap[t.name] ? { ...t, masterSchedule: scheduleMap[t.name], scheduleDetails: detailsMap[t.name] || {} } : t));
           Object.keys(scheduleMap).forEach(name => {
@@ -339,18 +345,10 @@ export default function SubstitutionApp() {
     getSortedTeachers(teachers).forEach(t => {
       const monthAbs = monthLogs.filter(l => l.absentId === t.id).length;
       const monthSubs = monthLogs.filter(l => l.subId === t.id).length;
-      csv += `${t.title||''},${t.name},${monthAbs},${monthSubs},${monthSubs - monthAbs}\n`;
+      csv += `${t.title||''},${t.name||''},${monthAbs},${monthSubs},${monthSubs - monthAbs}\n`;
     });
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a'); link.href = url; link.setAttribute('download', `stats_${statsMonth}.csv`);
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
-  };
-
-  const downloadTimetableTemplate = () => {
-    const csvContent = "\ufeff姓名,星期(1-5),節次(1-9),班級(重要),科目,是否入班(是/否)\n陳大文,1,1,3A,數學,否\n陳大文,1,2,3A,數學,否\n李小美,1,1,3A,數學支援,是\n李小美,1,3,1C,英文,否";
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a'); link.href = url; link.setAttribute('download', 'timetable_template_v2.csv');
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
@@ -388,9 +386,9 @@ export default function SubstitutionApp() {
           <div className="p-5 text-gray-700 whitespace-pre-wrap">{modal.message}</div>
           <div className="p-4 border-t border-purple-100 bg-purple-50 flex justify-end gap-3">
             {modal.type === 'confirm' ? (
-              <><button onClick={closeModal} className="px-4 py-2 text-gray-600 bg-white border rounded-lg hover:bg-gray-50">取消</button>
-              <button onClick={modal.onConfirm} className="px-4 py-2 text-white bg-purple-600 rounded-lg hover:bg-purple-700">確定</button></>
-            ) : (<button onClick={closeModal} className="px-4 py-2 text-white bg-purple-600 rounded-lg w-full">知道了</button>)}
+              <><button type="button" onClick={closeModal} className="px-4 py-2 text-gray-600 bg-white border rounded-lg hover:bg-gray-50">取消</button>
+              <button type="button" onClick={modal.onConfirm} className="px-4 py-2 text-white bg-purple-600 rounded-lg hover:bg-purple-700">確定</button></>
+            ) : (<button type="button" onClick={closeModal} className="px-4 py-2 text-white bg-purple-600 rounded-lg w-full">知道了</button>)}
           </div>
         </div>
       </div>
@@ -402,13 +400,12 @@ export default function SubstitutionApp() {
     const uniqueAbsentIds = [...new Set(dailyLogs.map(l => l.absentId))];
     const absentCols = uniqueAbsentIds.map(id => {
       const log = dailyLogs.find(l => l.absentId === id);
-      return { id, name: log.absentName, reason: log.reason };
+      return { id, name: log?.absentName, reason: log?.reason };
     });
     const sortedTeachers = getSortedTeachers(teachers);
 
     return (
       <div className="flex flex-col md:flex-row gap-4 h-[75vh]">
-        {/* 左側：推薦名單與操作 (佔 30%) */}
         <div className="w-full md:w-1/3 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full overflow-hidden animate-in fade-in slide-in-from-left-4">
           <h3 className="font-bold text-lg text-purple-900 mb-3 border-b border-purple-100 pb-2 flex items-center">
             <Star className="mr-2 text-fuchsia-500" size={18}/> 安排操作
@@ -427,7 +424,7 @@ export default function SubstitutionApp() {
                   <strong className="mr-2">班別:</strong> 
                   <input 
                     type="text" 
-                    value={activeCell.className}
+                    value={activeCell.className || ''}
                     onChange={(e) => {
                       const val = e.target.value;
                       setActiveCell(prev => ({...prev, className: val}));
@@ -439,11 +436,11 @@ export default function SubstitutionApp() {
                 {activeCell.subId && (
                   <div className="mt-3 p-2 bg-green-100 text-green-800 rounded flex justify-between items-center border border-green-200">
                     <span>已指派: <strong>{activeCell.subName}</strong></span>
-                    <button onClick={handleRemoveSub} className="text-xs bg-white text-red-500 px-2 py-1 rounded shadow-sm hover:bg-red-50 border border-red-100">移除代課</button>
+                    <button type="button" onClick={handleRemoveSub} className="text-xs bg-white text-red-500 px-2 py-1 rounded shadow-sm hover:bg-red-50 border border-red-100">移除代課</button>
                   </div>
                 )}
                 <div className="mt-3 pt-3 border-t border-purple-200 text-right">
-                  <button onClick={handleDeleteLog} className="text-xs text-red-500 hover:underline flex items-center justify-end w-full"><Trash2 size={12} className="mr-1"/> 刪除此節缺課紀錄</button>
+                  <button type="button" onClick={handleDeleteLog} className="text-xs text-red-500 hover:underline flex items-center justify-end w-full"><Trash2 size={12} className="mr-1"/> 刪除此節缺課紀錄</button>
                 </div>
               </div>
               
@@ -456,12 +453,12 @@ export default function SubstitutionApp() {
                    <div key={t.id} className="flex justify-between items-center p-2 bg-white border border-gray-200 rounded-lg shadow-sm hover:border-purple-400 transition-colors">
                       <div>
                         <div className="font-bold text-sm text-gray-800">{t.title ? `[${t.title}] ` : ''}{t.name}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">今日已代: <span className="font-bold text-purple-600">{t.dailySubCount}</span> 節 | 空堂: {t.actualFreePeriods.length}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">今日已代: <span className="font-bold text-purple-600">{t.dailySubCount}</span> 節 | 空堂: {(t.actualFreePeriods||[]).length}</div>
                         {t.isPriorityTarget && <div className="text-[10px] text-purple-600 font-bold mt-1 bg-purple-50 inline-block px-1 rounded">本班支援</div>}
                         {t.isExtractable && !t.isPriorityTarget && <div className="text-[10px] text-orange-600 mt-1 bg-orange-50 inline-block px-1 rounded">抽離 ({t.supportClass})</div>}
                         {t.isCore && !t.isExtractable && <div className="text-[10px] text-green-600 mt-1 bg-green-50 inline-block px-1 rounded">主科 ({t.coreSub})</div>}
                       </div>
-                      <button onClick={() => handleAssignSub(t.id, t.isExtractable)} className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-fuchsia-500 text-white rounded text-xs shadow hover:shadow-md active:scale-95 transition-all">指派</button>
+                      <button type="button" onClick={() => handleAssignSub(t.id, t.isExtractable)} className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-fuchsia-500 text-white rounded text-xs shadow hover:shadow-md active:scale-95 transition-all">指派</button>
                    </div>
                  ))}
                  {getAvailableTeachers().length === 0 && <div className="text-center text-gray-400 text-sm py-8 border border-dashed rounded-lg">該節次無可用老師</div>}
@@ -470,7 +467,6 @@ export default function SubstitutionApp() {
           )}
         </div>
 
-        {/* 右側：並列表格 (佔 70%) */}
         <div className="flex-1 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full animate-in fade-in slide-in-from-right-4">
            <div className="flex flex-wrap gap-3 items-end mb-4 border-b border-gray-100 pb-4">
               <div>
@@ -491,7 +487,7 @@ export default function SubstitutionApp() {
                     {ABSENT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>
-                <button onClick={handleAddAbsent} className="bg-purple-600 text-white px-3 py-1 rounded shadow hover:bg-purple-700 text-sm h-[30px] flex items-center"><Plus size={14} className="mr-1"/> 加入</button>
+                <button type="button" onClick={handleAddAbsent} className="bg-purple-600 text-white px-3 py-1 rounded shadow hover:bg-purple-700 text-sm h-[30px] flex items-center"><Plus size={14} className="mr-1"/> 加入</button>
               </div>
            </div>
 
@@ -549,61 +545,65 @@ export default function SubstitutionApp() {
     );
   };
 
-  const renderTeachersView = () => (
-    <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4 animate-in fade-in zoom-in duration-300">
-      <div className="flex flex-wrap justify-between items-center gap-2">
-        <h2 className="text-xl font-bold text-purple-800 flex items-center"><UserCheck className="mr-2"/> 教師設定</h2>
-        <div className="flex gap-2">
-          <button onClick={() => sortImportRef.current.click()} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm shadow hover:bg-green-700 flex items-center"><Upload size={14} className="mr-1"/> 匯入排序</button>
-          <input type="file" ref={sortImportRef} onChange={handleSortImport} className="hidden" />
-          <button onClick={downloadTimetableTemplate} className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm border border-purple-200 hover:bg-purple-100"><Download size={14} className="inline mr-1"/>範本</button>
-          <button onClick={() => timetableImportRef.current.click()} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm shadow hover:bg-purple-700"><FileText size={14} className="inline mr-1"/>匯入課表</button>
-          <button onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center"><Upload size={14} className="mr-1"/> 手動上傳雲端</button>
-          <input type="file" ref={timetableImportRef} onChange={e => handleCSVImport(e, 'timetable')} className="hidden" />
+  const renderTeachersView = () => {
+    const sorted = getSortedTeachers(teachers);
+    return (
+      <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4 animate-in fade-in zoom-in duration-300">
+        <div className="flex flex-wrap justify-between items-center gap-2">
+          <h2 className="text-xl font-bold text-purple-800 flex items-center"><UserCheck className="mr-2"/> 教師設定</h2>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => sortImportRef.current.click()} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm shadow hover:bg-green-700 flex items-center"><Upload size={14} className="mr-1"/> 匯入排序</button>
+            <input type="file" ref={sortImportRef} onChange={handleSortImport} className="hidden" />
+            <button type="button" onClick={downloadTimetableTemplate} className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm border border-purple-200 hover:bg-purple-100"><Download size={14} className="inline mr-1"/>範本</button>
+            <button type="button" onClick={() => timetableImportRef.current.click()} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm shadow hover:bg-purple-700"><FileText size={14} className="inline mr-1"/>匯入課表</button>
+            <button type="button" onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center"><Upload size={14} className="mr-1"/> 手動上傳雲端</button>
+            <input type="file" ref={timetableImportRef} onChange={e => handleCSVImport(e, 'timetable')} className="hidden" />
+          </div>
+        </div>
+        <form onSubmit={addTeacher} className="flex gap-2">
+          <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="職銜(可留空)" className="border border-purple-200 p-2 rounded-lg w-28 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
+          <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="新老師姓名" className="border border-purple-200 p-2 rounded-lg flex-1 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
+          <button type="submit" className="bg-fuchsia-600 text-white px-4 rounded-lg hover:bg-fuchsia-700 shadow"><Plus/></button>
+        </form>
+        <div className="overflow-x-auto rounded-xl border border-purple-100">
+          <table className="w-full text-sm">
+            <thead className="bg-purple-50 text-purple-900">
+              <tr>
+                <th className="p-3 text-center w-16">排序</th>
+                <th className="p-3 text-left w-20">職銜</th>
+                <th className="p-3 text-left">姓名</th>
+                <th className="p-3 text-left">當日空堂</th>
+                <th className="p-3 text-center">刪除</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-purple-50">
+              {sorted.map((t, index, arr) => (
+                <tr key={t?.id || index} className="hover:bg-purple-50 bg-white">
+                  <td className="p-3 text-center">
+                    <div className="flex flex-col gap-1 items-center justify-center">
+                      <button type="button" onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button>
+                      <button type="button" onClick={() => moveTeacher(index, 'down')} disabled={index===(arr.length-1)} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
+                    </div>
+                  </td>
+                  <td className="p-3 text-gray-500 font-medium text-xs">{t?.title || '-'}</td>
+                  <td className="p-3 font-medium">{t?.name || '未知'}</td>
+                  <td className="p-3 flex flex-wrap gap-1">
+                    {PERIODS.map(p => (
+                      <button type="button" key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t?.freePeriods || []).includes(p) ? 'bg-green-100 text-green-700 border border-green-300 font-bold' : 'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>
+                    ))}
+                  </td>
+                  <td className="p-3 text-center">
+                    <button type="button" onClick={()=>deleteTeacher(t?.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button>
+                  </td>
+                </tr>
+              ))}
+              {sorted.length === 0 && <tr><td colSpan="5" className="p-6 text-center text-gray-400">目前沒有任何教師資料</td></tr>}
+            </tbody>
+          </table>
         </div>
       </div>
-      <form onSubmit={addTeacher} className="flex gap-2">
-        <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="職銜(可留空)" className="border border-purple-200 p-2 rounded-lg w-28 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
-        <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="新老師姓名" className="border border-purple-200 p-2 rounded-lg flex-1 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
-        <button className="bg-fuchsia-600 text-white px-4 rounded-lg hover:bg-fuchsia-700 shadow"><Plus/></button>
-      </form>
-      <div className="overflow-x-auto rounded-xl border border-purple-100">
-        <table className="w-full text-sm">
-          <thead className="bg-purple-50 text-purple-900">
-            <tr>
-              <th className="p-3 text-center w-16">排序</th>
-              <th className="p-3 text-left w-20">職銜</th>
-              <th className="p-3 text-left">姓名</th>
-              <th className="p-3 text-left">當日空堂</th>
-              <th className="p-3 text-center">刪除</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-purple-50">
-            {getSortedTeachers(teachers).map((t, index) => (
-              <tr key={t.id} className="hover:bg-purple-50 bg-white">
-                <td className="p-3 text-center">
-                  <div className="flex flex-col gap-1 items-center justify-center">
-                    <button type="button" onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button>
-                    <button type="button" onClick={() => moveTeacher(index, 'down')} disabled={index===teachers.length-1} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
-                  </div>
-                </td>
-                <td className="p-3 text-gray-500 font-medium text-xs">{t.title || '-'}</td>
-                <td className="p-3 font-medium">{t.name}</td>
-                <td className="p-3 flex flex-wrap gap-1">
-                  {PERIODS.map(p => (
-                    <button key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t.freePeriods || []).includes(p)?'bg-green-100 text-green-700 border border-green-300 font-bold':'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>
-                  ))}
-                </td>
-                <td className="p-3 text-center">
-                  <button onClick={()=>deleteTeacher(t.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+    );
+  };
 
   const renderStatsView = () => {
     const monthLogs = logs.filter(l => (l.date || '').startsWith(statsMonth));
@@ -623,7 +623,7 @@ export default function SubstitutionApp() {
                  <label className="text-sm text-gray-600 mr-2 font-bold">選擇月份:</label>
                  <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)} className="border-none bg-transparent outline-none text-purple-700 font-bold" />
               </div>
-              <button onClick={exportStatsToCSV} className="px-3 py-1.5 bg-fuchsia-600 text-white rounded-lg text-sm shadow hover:bg-fuchsia-700 flex items-center"><Download size={14} className="mr-1"/>匯出 CSV</button>
+              <button type="button" onClick={exportStatsToCSV} className="px-3 py-1.5 bg-fuchsia-600 text-white rounded-lg text-sm shadow hover:bg-fuchsia-700 flex items-center"><Download size={14} className="mr-1"/>匯出 CSV</button>
             </div>
           </div>
           <div className="overflow-hidden rounded-xl border border-purple-100">
@@ -644,8 +644,8 @@ export default function SubstitutionApp() {
         <div className="bg-gradient-to-r from-gray-50 to-purple-50 p-6 rounded-2xl shadow-inner border border-purple-100">
           <h3 className="font-bold text-gray-700 mb-2 flex items-center"><Save className="mr-2" size={18}/> 備份與還原</h3>
           <div className="flex gap-3 mt-3">
-            <button onClick={downloadBackup} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm shadow hover:bg-blue-700 transition-colors flex items-center"><Download size={14} className="mr-2"/>下載備份</button>
-            <button onClick={()=>backupImportRef.current.click()} className="bg-white text-gray-700 border border-gray-300 px-4 py-2 rounded-lg text-sm shadow-sm hover:bg-gray-50 transition-colors flex items-center"><RefreshCw size={14} className="mr-2"/>還原備份</button>
+            <button type="button" onClick={downloadBackup} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm shadow hover:bg-blue-700 transition-colors flex items-center"><Download size={14} className="mr-2"/>下載備份</button>
+            <button type="button" onClick={()=>backupImportRef.current.click()} className="bg-white text-gray-700 border border-gray-300 px-4 py-2 rounded-lg text-sm shadow-sm hover:bg-gray-50 transition-colors flex items-center"><RefreshCw size={14} className="mr-2"/>還原備份</button>
             <input type="file" ref={backupImportRef} onChange={restoreBackup} className="hidden" />
           </div>
           {lastSaved && <p className="text-xs text-green-600 text-right mt-2 flex justify-end items-center"><CheckCircle size={10} className="mr-1"/>上次雲端同步: {lastSaved.toLocaleTimeString()}</p>}
@@ -715,7 +715,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.7)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.8)...</h2>
       </div>
     );
   }
@@ -726,7 +726,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.7</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.8</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
