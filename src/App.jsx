@@ -1,13 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, FileWarning, Image as ImageIcon } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, Cloud, CloudOff, Loader2, Save, RefreshCw } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
-// --- 常數設定 (v4.6) ---
 const TOTAL_PERIODS = 9;
 const PERIODS = Array.from({ length: TOTAL_PERIODS }, (_, i) => i + 1);
 const CORE_SUBJECTS = ['中文', '英文', '數學', 'CHI', 'ENG', 'MATH', 'CHINESE', 'ENGLISH', 'MATHEMATICS'];
 const ABSENT_REASONS = ['病假', '事假', '進修', '覆診', '遲返', '早退', '交流', '帶隊'];
-
 const STORAGE_KEY_TEACHERS = 'substitution_system_teachers_data_v3';
 const STORAGE_KEY_LOGS = 'substitution_system_logs_data_v3';
 
@@ -16,19 +14,7 @@ const getInitialDate = () => {
   const day = d.getDay();
   if (day === 6) d.setDate(d.getDate() + 2);
   else if (day === 0) d.setDate(d.getDate() + 1);
-  const tzOffset = d.getTimezoneOffset() * 60000;
-  return new Date(d - tzOffset).toISOString().split('T')[0];
-};
-
-// 輔助函式：教師排序 (v4.6 補回修復)
-const getSortedTeachers = (teacherList) => {
-  const safeList = Array.isArray(teacherList) ? teacherList : [];
-  return [...safeList].sort((a, b) => {
-    const orderA = a?.sortOrder !== undefined ? a.sortOrder : 9999;
-    const orderB = b?.sortOrder !== undefined ? b.sortOrder : 9999;
-    if (orderA !== orderB) return orderA - orderB;
-    return (a?.name || '').localeCompare(b?.name || '', "zh-HK");
-  });
+  return new Date(d - d.getTimezoneOffset() * 60000).toISOString().split('T')[0];
 };
 
 export default function SubstitutionApp() {
@@ -51,10 +37,9 @@ export default function SubstitutionApp() {
   const [newTitle, setNewTitle] = useState(''); 
   const [newName, setNewName] = useState(''); 
 
-  const teacherImportRef = useRef(null);
+  const sortImportRef = useRef(null);
   const timetableImportRef = useRef(null);
   const backupImportRef = useRef(null);
-  const sortImportRef = useRef(null);
 
   const [modal, setModal] = useState({ isOpen: false, type: 'info', title: '', message: '', onConfirm: null });
   const [swapModal, setSwapModal] = useState({ isOpen: false, logId: null, subTeacher: null, options: [], selectedOption: null });
@@ -66,12 +51,11 @@ export default function SubstitutionApp() {
       try {
         const fb = await import('./firebaseConfig');
         if (fb && fb.db) dbRef.current = fb.db;
-      } catch (e) { console.log("提示: 本機模式 (無 Firebase 設定)"); }
+      } catch (e) { console.log("本機模式"); }
 
       if (dbRef.current) {
         try {
-          const docRef = doc(dbRef.current, "school_data", "main_backup_v3");
-          const docSnap = await getDoc(docRef);
+          const docSnap = await getDoc(doc(dbRef.current, "school_data", "main_backup_v3"));
           if (docSnap.exists()) {
             const data = docSnap.data();
             setTeachers(Array.isArray(data.teachers) ? data.teachers : []);
@@ -79,9 +63,7 @@ export default function SubstitutionApp() {
             setLastSaved(data.lastUpdated ? new Date(data.lastUpdated) : new Date());
             loadedFromCloud = true;
             setIsCloudEnabled(true); 
-          } else {
-            setIsCloudEnabled(true); 
-          }
+          } else setIsCloudEnabled(true); 
         } catch (error) { setIsCloudEnabled(false); }
       }
 
@@ -126,32 +108,16 @@ export default function SubstitutionApp() {
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
 
-  // 手動上傳雲端 (v4.6 補回修復)
-  const handleManualCloudUpload = async () => {
-    if (!isCloudEnabled || !dbRef.current) {
-      showAlert("提示", "目前為本機模式或無 Firebase 連線，無法手動上傳。");
-      return;
-    }
-    setSaveStatus('saving');
-    try {
-      const safeTeachers = Array.isArray(teachers) ? teachers : [];
-      const safeLogs = Array.isArray(logs) ? logs : [];
-      await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
-        teachers: safeTeachers,
-        logs: safeLogs,
-        lastUpdated: new Date().toISOString()
-      });
-      setLastSaved(new Date());
-      setSaveStatus('idle');
-      showAlert("成功", "資料已成功手動同步至雲端！");
-    } catch (err) {
-      console.error(err);
-      setSaveStatus('error');
-      showAlert("錯誤", "上傳至雲端失敗，請檢查網路連線。");
-    }
+  const getSortedTeachers = (list) => {
+    if (!Array.isArray(list)) return [];
+    return [...list].sort((a, b) => {
+      const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
+      const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.name || '').localeCompare(b.name || '', "zh-HK");
+    });
   };
 
-  // 下載圖片功能
   const downloadImage = (elementId, filename) => {
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
@@ -170,39 +136,28 @@ export default function SubstitutionApp() {
 
   const handleAddAbsent = () => {
     if (!newAbsentId) return showAlert("提示", "請選擇缺席老師");
-    const safeTeachers = Array.isArray(teachers) ? teachers : [];
-    const safeLogs = Array.isArray(logs) ? logs : [];
-    const t = safeTeachers.find(x => x.id == newAbsentId);
+    const t = (Array.isArray(teachers)?teachers:[]).find(x => x.id == newAbsentId);
     if (!t) return;
     const dayOfWeek = new Date(formDate).getDay();
     const busy = t.masterSchedule?.[dayOfWeek] || [];
-    const existing = safeLogs.filter(l => l?.date === formDate && l?.absentId == newAbsentId).map(l => l.period);
+    const existing = (Array.isArray(logs)?logs:[]).filter(l => l?.date === formDate && l?.absentId == newAbsentId).map(l => l.period);
     
     const newLogs = [];
     busy.forEach(p => {
       if (!existing.includes(p)) {
         const detail = t.scheduleDetails?.[`${dayOfWeek}-${p}`];
         const cName = detail?.className || '';
-        const isSupport = detail?.isSupport === true;
-        const isSClass = isSupport || cName.toUpperCase().includes('S');
+        const isSClass = detail?.isSupport === true || cName.toUpperCase().includes('S');
         
         newLogs.push({
           id: Date.now() + Math.random(),
-          date: formDate,
-          period: p,
-          className: cName,
-          absentName: t.name || '未知',
-          absentId: t.id,
-          reason: newAbsentReason,
-          subName: isSClass ? 'S班取消' : null,
-          subId: isSClass ? 'CANCELLED' : null,
-          note: '',
-          isSwap: false,
-          timestamp: new Date().toLocaleString()
+          date: formDate, period: p, className: cName,
+          absentName: t.name || '未知', absentId: t.id, reason: newAbsentReason,
+          subName: isSClass ? 'S班取消' : null, subId: isSClass ? 'CANCELLED' : null,
+          note: '', isSwap: false, timestamp: new Date().toLocaleString()
         });
       }
     });
-    
     if (newLogs.length > 0) setLogs(prev => [...(Array.isArray(prev)?prev:[]), ...newLogs]);
     else showAlert("提示", "該老師今日無排定課堂，或已全數加入缺席名單。");
     setNewAbsentId('');
@@ -210,18 +165,16 @@ export default function SubstitutionApp() {
 
   const getCategorizedTeachers = () => {
     if (!activeCell) return { recommended: [], subbedOne: [], notArranged: [] };
-    const safeTeachers = Array.isArray(teachers) ? teachers : [];
-    const safeLogs = Array.isArray(logs) ? logs : [];
     const p = activeCell.period;
     const dayOfWeek = new Date(formDate).getDay();
     const targetKey = `${dayOfWeek}-${p}`; 
-    const dailyLogs = safeLogs.filter(l => l?.date === formDate);
+    const normClass = (activeCell.className || '').trim().toUpperCase();
+    const dailyLogs = (Array.isArray(logs)?logs:[]).filter(l => l?.date === formDate);
     const absentTeacherIds = [...new Set(dailyLogs.map(l => l.absentId))].filter(Boolean); 
 
-    const allMapped = safeTeachers.map(t => {
+    const allMapped = (Array.isArray(teachers)?teachers:[]).map(t => {
       const subbedLogs = dailyLogs.filter(log => log?.subId == t.id);
       const extraSubCount = subbedLogs.filter(l => !l.isSwap).length; 
-      
       const baseFree = t.freePeriods || [];
       const actualFreeCount = baseFree.length - extraSubCount;
 
@@ -244,7 +197,6 @@ export default function SubstitutionApp() {
       
       const isFreeAtP = baseFree.includes(p) && !subbedLogs.some(l => l.period === p && !l.isSwap);
       const canSubAtP = isFreeAtP || isSupport; 
-
       const currentStatus = isFreeAtP ? '空堂' : '入班';
 
       return {
@@ -260,7 +212,6 @@ export default function SubstitutionApp() {
 
     allMapped.forEach(t => {
       if (t.id == activeCell.absentId) return; 
-
       if (t.isAbsent || (!t.isSpecialRole && t.freePeriods.length <= 2)) {
           notArranged.push(t);
       } else if (t.canSubAtP) {
@@ -275,12 +226,7 @@ export default function SubstitutionApp() {
       if (a.actualFreeCount !== b.actualFreeCount) return b.actualFreeCount - a.actualFreeCount;
       return (a.name || '').localeCompare(b.name || '', "zh-HK");
     };
-
-    return {
-      recommended: recommended.sort(sorter),
-      subbedOne: subbedOne.sort(sorter),
-      notArranged: notArranged.sort(sorter)
-    };
+    return { recommended: recommended.sort(sorter), subbedOne: subbedOne.sort(sorter), notArranged: notArranged.sort(sorter) };
   };
 
   const commitAssign = (logId, subId, subName, note, isSwap) => {
@@ -300,9 +246,7 @@ export default function SubstitutionApp() {
             const busyPeriods = t.masterSchedule?.[dayOfWeek] || [];
             const options = busyPeriods.map(bp => {
                 const detail = t.scheduleDetails?.[`${dayOfWeek}-${bp}`];
-                if (detail?.isSupport) {
-                     return { period: bp, className: detail.className };
-                }
+                if (detail?.isSupport) return { period: bp, className: detail.className };
                 return null;
             }).filter(Boolean);
             
@@ -310,8 +254,7 @@ export default function SubstitutionApp() {
             setSwapModal({ isOpen: true, logId: activeCell.logId, subTeacher: t, options, selectedOption: options[0] });
         }
     } else {
-        let note = '';
-        if (t.isSupport) note = t.supportClass ? `(${t.supportClass}不抽離)` : `(支援不抽離)`;
+        const note = t.isSupport ? (t.supportClass ? `(${t.supportClass}不抽離)` : `(支援不抽離)`) : '';
         commitAssign(activeCell.logId, t.id, t.name, note, false);
     }
   };
@@ -323,16 +266,14 @@ export default function SubstitutionApp() {
         if (t.actualFreeCount - 1 < 2) {
             showConfirm("警告", `此老師代課後，當日空堂將不足2節 (剩餘 ${t.actualFreeCount - 1} 節)。確定要強行安排嗎？`, () => {
                 commitAssign(swapModal.logId, t.id, t.name, '(額外代課)', false);
-                setSwapModal({ isOpen: false });
-                closeModal();
+                setSwapModal({ isOpen: false }); closeModal();
             });
         } else {
             commitAssign(swapModal.logId, t.id, t.name, '(額外代課)', false);
             setSwapModal({ isOpen: false });
         }
     } else {
-        const note = `(第${opt.period}節轉上，${opt.className}不入班)`;
-        commitAssign(swapModal.logId, t.id, t.name, note, true);
+        commitAssign(swapModal.logId, t.id, t.name, `(第${opt.period}節轉上，${opt.className}不入班)`, true);
         setSwapModal({ isOpen: false });
     }
   };
@@ -438,17 +379,11 @@ export default function SubstitutionApp() {
           }
           
           const currentDayOfWeek = new Date(formDate).getDay();
-          
           newTeachers = newTeachers.map(t => {
               const mSchedule = scheduleMap[t.name] || {};
               const busy = mSchedule[currentDayOfWeek] || [];
               const free = (currentDayOfWeek >= 1 && currentDayOfWeek <= 5) ? PERIODS.filter(p => !busy.includes(p)) : [];
-              return { 
-                  ...t, 
-                  masterSchedule: mSchedule, 
-                  scheduleDetails: detailsMap[t.name] || {},
-                  freePeriods: free
-              };
+              return { ...t, masterSchedule: mSchedule, scheduleDetails: detailsMap[t.name] || {}, freePeriods: free };
           });
           
           Object.keys(scheduleMap).forEach(name => {
@@ -456,50 +391,37 @@ export default function SubstitutionApp() {
                  const mSchedule = scheduleMap[name];
                  const busy = mSchedule[currentDayOfWeek] || [];
                  const free = (currentDayOfWeek >= 1 && currentDayOfWeek <= 5) ? PERIODS.filter(p => !busy.includes(p)) : [];
-                 newTeachers.push({ 
-                     id: Date.now()+Math.random(), 
-                     title: "", 
-                     name, 
-                     freePeriods: free, 
-                     masterSchedule: mSchedule, 
-                     scheduleDetails: detailsMap[name] || {}, 
-                     sortOrder: 9999 
-                 });
+                 newTeachers.push({ id: Date.now()+Math.random(), title: "", name, freePeriods: free, masterSchedule: mSchedule, scheduleDetails: detailsMap[name] || {}, sortOrder: 9999 });
              }
           });
         }
         setTeachers(newTeachers);
-        
         if (isCloudEnabled && dbRef.current) {
-            setSaveStatus('saving');
-            const safeLogs = Array.isArray(logs) ? logs : [];
-            try {
-                await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
-                    teachers: newTeachers,
-                    logs: safeLogs,
-                    lastUpdated: new Date().toISOString()
-                });
-                setLastSaved(new Date());
-                setSaveStatus('idle');
-            } catch (err) {
-                console.error(err);
-                setSaveStatus('error');
-            }
+            await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), { teachers: newTeachers, logs: Array.isArray(logs)?logs:[], lastUpdated: new Date().toISOString() });
+            setLastSaved(new Date());
         }
-        showAlert("匯入成功", "舊課表資料已清除，當日空堂已自動計算，新課表已成功更新並上載至雲端。");
-      } catch (err) { showAlert("錯誤", "格式有誤或上載失敗"); setSaveStatus('error'); }
+        showAlert("匯入成功", "舊課表已清除，空堂已自動計算並上載至雲端。");
+      } catch (err) { showAlert("錯誤", "格式有誤或上載失敗"); }
       e.target.value = '';
     };
     reader.readAsText(file);
   };
 
+  const handleManualCloudUpload = async () => {
+    if (!isCloudEnabled || !dbRef.current) return showAlert("提示", "目前為本機模式，無法上傳雲端。");
+    setSaveStatus('saving');
+    try {
+      await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), { teachers, logs, lastUpdated: new Date().toISOString() });
+      setLastSaved(new Date()); setSaveStatus('idle'); showAlert("成功", "資料已成功上傳！");
+    } catch (e) { setSaveStatus('error'); showAlert("錯誤", "上傳失敗。"); }
+  };
+
   const exportStatsToCSV = () => {
-    const safeLogs = Array.isArray(logs) ? logs : [];
-    const monthLogs = safeLogs.filter(l => (l?.date || '').startsWith(statsMonth));
+    const monthLogs = (Array.isArray(logs)?logs:[]).filter(l => (l?.date || '').startsWith(statsMonth));
     let csv = `\ufeff職銜,姓名,${statsMonth} 缺課,${statsMonth} 代課,淨值\n`;
     getSortedTeachers(teachers).forEach(t => {
       const monthAbs = monthLogs.filter(l => l?.absentId === t.id).length;
-      const monthSubs = monthLogs.filter(l => l?.subId === t.id && l?.subId !== 'CANCELLED' && !l?.isSwap).length;
+      const monthSubs = monthLogs.filter(l => l?.subId === t.id && l?.subId !== 'CANCELLED' && !l?.isSwap).length; 
       csv += `${t?.title||''},${t?.name||''},${monthAbs},${monthSubs},${monthSubs - monthAbs}\n`;
     });
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
@@ -508,7 +430,7 @@ export default function SubstitutionApp() {
   };
 
   const downloadTimetableTemplate = () => {
-    const csvContent = "\ufeff姓名,星期(1-5),節次(1-9),班級(重要),科目,是否入班(是/否)\n陳大文,1,1,3A,數學,否\n陳大文,1,2,3A,數學,否\n李小美,1,1,3A,數學支援,是\n李小美,1,3,1C,英文,否";
+    const csvContent = "\ufeff姓名,星期(1-5),節次(1-9),班級(重要),科目,是否入班(是/否)\n陳大文,1,1,3A,數學,否\n李小美,1,3,1C,英文,否";
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a'); link.href = url; link.setAttribute('download', 'timetable_template_v3.csv');
@@ -517,7 +439,7 @@ export default function SubstitutionApp() {
 
   const downloadBackup = () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify({ teachers, logs, backupDate: new Date().toISOString() }, null, 2)], { type: 'application/json' }));
-    const link = document.createElement('a'); link.href = url; link.setAttribute('download', `backup_${new Date().toISOString().slice(0,10)}.json`);
+    const link = document.createElement('a'); link.href = url; link.setAttribute('download', `backup.json`);
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
@@ -527,10 +449,8 @@ export default function SubstitutionApp() {
     reader.onload = (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
-        if(data.teachers && data.logs && window.confirm("確定還原？")) {
-          setTeachers(Array.isArray(data.teachers)?data.teachers:[]); 
-          setLogs(Array.isArray(data.logs)?data.logs:[]); 
-          showAlert("成功", "資料已還原。");
+        if(data.teachers && window.confirm("確定還原？")) {
+          setTeachers(Array.isArray(data.teachers)?data.teachers:[]); setLogs(Array.isArray(data.logs)?data.logs:[]); showAlert("成功", "已還原。");
         }
       } catch(err) { showAlert("錯誤", "檔案無效"); }
       e.target.value = '';
@@ -542,17 +462,11 @@ export default function SubstitutionApp() {
     if (!modal.isOpen) return null;
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden border border-purple-100">
-          <div className="p-4 border-b border-purple-100 flex items-center justify-between bg-purple-50">
-            <h3 className="font-bold text-lg flex items-center text-purple-900">{modal.title}</h3>
-            <button onClick={closeModal} className="text-purple-400 hover:text-purple-600"><X size={20} /></button>
-          </div>
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in border border-purple-100">
+          <div className="p-4 border-b border-purple-100 flex justify-between bg-purple-50"><h3 className="font-bold text-lg text-purple-900">{modal.title}</h3><button onClick={closeModal} className="text-purple-400 hover:text-purple-600"><X size={20} /></button></div>
           <div className="p-5 text-gray-700 whitespace-pre-wrap">{modal.message}</div>
           <div className="p-4 border-t border-purple-100 bg-purple-50 flex justify-end gap-3">
-            {modal.type === 'confirm' ? (
-              <><button type="button" onClick={closeModal} className="px-4 py-2 text-gray-600 bg-white border rounded-lg hover:bg-gray-50">取消</button>
-              <button type="button" onClick={modal.onConfirm} className="px-4 py-2 text-white bg-purple-600 rounded-lg hover:bg-purple-700">確定</button></>
-            ) : (<button type="button" onClick={closeModal} className="px-4 py-2 text-white bg-purple-600 rounded-lg w-full">知道了</button>)}
+            {modal.type === 'confirm' ? (<><button onClick={closeModal} className="px-4 py-2 text-gray-600 bg-white border rounded hover:bg-gray-50">取消</button><button onClick={modal.onConfirm} className="px-4 py-2 text-white bg-purple-600 rounded hover:bg-purple-700">確定</button></>) : (<button onClick={closeModal} className="px-4 py-2 text-white bg-purple-600 rounded w-full">知道了</button>)}
           </div>
         </div>
       </div>
@@ -563,28 +477,15 @@ export default function SubstitutionApp() {
     if (!swapModal.isOpen) return null;
     return (
       <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden border border-blue-100">
-          <div className="p-4 border-b border-blue-100 bg-blue-50">
-            <h3 className="font-bold text-lg text-blue-900">選擇轉空堂的節次</h3>
-            <p className="text-sm text-gray-600 mt-1">請選擇 <strong>{swapModal.subTeacher?.name}</strong> 老師哪一節入班轉為空堂：</p>
-          </div>
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in border border-blue-100">
+          <div className="p-4 border-b border-blue-100 bg-blue-50"><h3 className="font-bold text-lg text-blue-900">選擇轉空堂的節次</h3><p className="text-sm text-gray-600 mt-1">請選擇 <strong>{swapModal.subTeacher?.name}</strong> 老師哪一節入班轉為空堂：</p></div>
           <div className="p-5">
-            <select
-              className="w-full border border-gray-300 p-2 rounded focus:border-blue-500 outline-none"
-              value={swapModal.selectedOption?.period}
-              onChange={(e) => {
-                const opt = swapModal.options.find(o => o.period == e.target.value);
-                setSwapModal({ ...swapModal, selectedOption: opt });
-              }}
-            >
-              {swapModal.options.map(o => (
-                <option key={o.period} value={o.period}>{o.period === -1 ? o.className : `第 ${o.period} 節 - ${o.className} 班`}</option>
-              ))}
+            <select className="w-full border border-gray-300 p-2 rounded focus:border-blue-500 outline-none" value={swapModal.selectedOption?.period} onChange={(e) => { setSwapModal({ ...swapModal, selectedOption: swapModal.options.find(o => o.period == e.target.value) }); }}>
+              {swapModal.options.map(o => (<option key={o.period} value={o.period}>{o.period === -1 ? o.className : `第 ${o.period} 節 - ${o.className} 班`}</option>))}
             </select>
           </div>
           <div className="p-4 border-t border-blue-100 bg-blue-50 flex justify-end gap-3">
-            <button type="button" onClick={() => setSwapModal({ isOpen: false })} className="px-4 py-2 text-gray-600 bg-white border rounded-lg hover:bg-gray-50">取消</button>
-            <button type="button" onClick={handleSwapConfirm} className="px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700">確定</button>
+            <button onClick={() => setSwapModal({ isOpen: false })} className="px-4 py-2 text-gray-600 bg-white border rounded hover:bg-gray-50">取消</button><button onClick={handleSwapConfirm} className="px-4 py-2 text-white bg-blue-600 rounded hover:bg-blue-700">確定</button>
           </div>
         </div>
       </div>
@@ -593,26 +494,19 @@ export default function SubstitutionApp() {
 
   const renderTeacherList = (title, list, emptyMsg) => (
     <div className="mb-4">
-      <div className="text-xs text-purple-700 mb-2 font-bold flex justify-between">
-         <span>{title}</span>
-      </div>
+      <div className="text-xs text-purple-700 mb-2 font-bold flex justify-between"><span>{title}</span></div>
       <div className="space-y-2">
          {list.map(t => (
            <div key={t.id} className="flex justify-between items-center p-2 bg-white border border-gray-200 rounded-lg shadow-sm hover:border-purple-400 transition-colors">
               <div>
                 <div className="font-bold text-sm text-gray-800">{t.title ? `[${t.title}] ` : ''}{t.name}</div>
-                <div className="text-xs text-gray-500 mt-0.5">今日已代: <span className="font-bold text-purple-600">{t.extraSubCount}</span> 節 | 剩餘空堂: {t.actualFreeCount} (總:{t.freePeriods.length})</div>
-                
+                <div className="text-xs text-gray-500 mt-0.5">額外已代: <span className="font-bold text-purple-600">{t.extraSubCount}</span> 節 | 剩餘空堂: {t.actualFreeCount}</div>
                 {t.rolePriority === 1 && <div className="text-[10px] text-indigo-600 font-bold mt-1 bg-indigo-50 inline-block px-1 rounded border border-indigo-200 mr-1">外聘代課</div>}
                 {t.rolePriority === 2 && <div className="text-[10px] text-teal-600 font-bold mt-1 bg-teal-50 inline-block px-1 rounded border border-teal-200 mr-1">實習</div>}
-                {(t.isPT || t.isTA) && (
-                  <div className={`text-[10px] font-bold mt-1 inline-block px-1 rounded border mr-1 ${t.currentStatus === '空堂' ? 'text-green-600 bg-green-50 border-green-200' : 'text-orange-600 bg-orange-50 border-orange-200'}`}>
-                    {t.isPT ? 'PT' : 'TA'} ({t.currentStatus})
-                  </div>
-                )}
+                {(t.isPT || t.isTA) && ( <div className={`text-[10px] font-bold mt-1 inline-block px-1 rounded border mr-1 ${t.currentStatus === '空堂' ? 'text-green-600 bg-green-50 border-green-200' : 'text-orange-600 bg-orange-50 border-orange-200'}`}>{t.isPT ? 'PT' : 'TA'} ({t.currentStatus})</div> )}
                 {t.isSupport && t.rolePriority >= 5 && <div className="text-[10px] text-orange-600 mt-1 bg-orange-50 inline-block px-1 rounded mr-1">抽離 ({t.supportClass})</div>}
               </div>
-              {title !== "不安排名單" && <button type="button" onClick={() => handleAssignSub(t)} className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-fuchsia-500 text-white rounded text-xs shadow hover:shadow-md active:scale-95 transition-all">指派</button>}
+              {title !== "不安排名單" && <button type="button" onClick={() => handleAssignSub(t)} className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-fuchsia-500 text-white rounded text-xs shadow">指派</button>}
               {title === "不安排名單" && <div className="text-xs text-red-400">{t.isAbsent ? '缺席' : '空堂≤2'}</div>}
            </div>
          ))}
@@ -620,7 +514,6 @@ export default function SubstitutionApp() {
       </div>
     </div>
   );
-
   const renderArrangeView = () => {
     const safeLogs = Array.isArray(logs) ? logs : [];
     const dailyLogs = safeLogs.filter(l => l?.date === formDate);
@@ -635,7 +528,7 @@ export default function SubstitutionApp() {
     return (
       <div className="flex flex-col md:flex-row gap-4 h-[75vh]">
         {/* 左側：推薦名單 */}
-        <div className="w-full md:w-1/3 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full overflow-hidden">
+        <div className="w-full md:w-1/3 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full overflow-hidden animate-in fade-in slide-in-from-left-4">
           <h3 className="font-bold text-lg text-purple-900 mb-3 border-b border-purple-100 pb-2 flex items-center">
             <Star className="mr-2 text-fuchsia-500" size={18}/> 安排操作
           </h3>
@@ -684,7 +577,7 @@ export default function SubstitutionApp() {
                    <>
                      {renderTeacherList("推薦代課名單", recommended, "無優先推薦老師")}
                      {renderTeacherList("額外1節名單 (已代1節)", subbedOne, "無老師在此名單")}
-                     {renderTeacherList("不安排名單", notArranged, "")}
+                     {renderTeacherList("不安排名單", notArranged, "無老師在此名單")}
                    </>
                  ) : (
                    <div className="text-center text-gray-400 text-sm py-8 border border-dashed rounded-lg mt-4">課堂已取消</div>
@@ -695,7 +588,7 @@ export default function SubstitutionApp() {
         </div>
 
         {/* 右側：並列表格 */}
-        <div className="flex-1 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full">
+        <div className="flex-1 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full animate-in fade-in slide-in-from-right-4">
            <div className="flex flex-wrap justify-between items-end mb-4 border-b border-gray-100 pb-4">
               <div className="flex gap-3 items-end">
                   <div>
@@ -723,7 +616,7 @@ export default function SubstitutionApp() {
            </div>
 
            <div className="flex-1 overflow-auto rounded-lg border border-gray-200" id="arrange-table-capture">
-             <table className="w-full text-sm text-center border-collapse min-w-max">
+             <table className="w-full text-sm text-center border-collapse min-w-max bg-white">
                 <thead className="bg-purple-50 sticky top-0 z-20 shadow-sm">
                    <tr>
                      <th className="p-2 border-b border-r border-gray-200 min-w-[60px] bg-purple-100 sticky left-0 z-30">節次</th>
@@ -786,7 +679,7 @@ export default function SubstitutionApp() {
   const renderTeachersView = () => {
     const sortedTeachers = getSortedTeachers(teachers);
     return (
-      <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4">
+      <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4 animate-in fade-in zoom-in duration-300">
         <div className="flex flex-wrap justify-between items-center gap-2">
           <h2 className="text-xl font-bold text-purple-800 flex items-center"><UserCheck className="mr-2"/> 教師設定</h2>
           <div className="flex gap-2">
@@ -853,7 +746,7 @@ export default function SubstitutionApp() {
     });
 
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 animate-in fade-in zoom-in duration-300">
         <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100">
           <div className="flex justify-between items-center mb-4 flex-wrap gap-4">
             <h2 className="text-xl font-bold text-purple-800 flex items-center"><BarChart3 className="mr-2"/> 每月缺代課統計</h2>
@@ -899,7 +792,7 @@ export default function SubstitutionApp() {
     const uniqueAbsents = [...new Set(dailyLogs.map(l => l?.absentName))].filter(Boolean);
 
     return (
-      <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100">
+      <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 每日代課名單</h2>
           <div className="flex items-center gap-3">
@@ -957,7 +850,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (v4.6)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.5)...</h2>
       </div>
     );
   }
@@ -969,7 +862,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 v4.6</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.5</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
