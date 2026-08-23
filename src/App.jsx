@@ -29,6 +29,7 @@ export default function SubstitutionApp() {
   const [selectedPeriod, setSelectedPeriod] = useState('');
   const [absentTeacherId, setAbsentTeacherId] = useState('');
   const [className, setClassName] = useState('');
+  const [newTitle, setNewTitle] = useState(''); 
   const [newName, setNewName] = useState(''); 
 
   const teacherImportRef = useRef(null);
@@ -90,8 +91,8 @@ export default function SubstitutionApp() {
           } catch (e) { console.error("LS Error", e); }
         } else {
           setTeachers([
-            { id: 1, name: "陳大文", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} },
-            { id: 2, name: "李小美", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {} }
+            { id: 1, title: "", name: "陳大文", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 },
+            { id: 2, title: "", name: "李小美", freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }
           ]);
         }
         
@@ -203,7 +204,8 @@ export default function SubstitutionApp() {
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
-      setTeachers([...teachers, { id: Date.now(), name: newName, freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
+      setTeachers([...teachers, { id: Date.now(), title: newTitle.trim(), name: newName.trim(), freePeriods: [], absences: 0, substitutions: 0, masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
+      setNewTitle('');
       setNewName('');
     }
   };
@@ -439,16 +441,24 @@ export default function SubstitutionApp() {
     reader.onload = (ev) => {
       try {
         const rows = ev.target.result.split('\n').map(r => r.trim()).filter(r => r);
-        const sortNames = rows.map(row => {
+        const sortData = rows.map(row => {
            const cols = row.split(',');
-           return cols.length >= 2 ? cols[1].trim() : cols[0].trim();
-        }).filter(n => n);
+           return {
+               title: cols.length >= 2 ? cols[0].trim() : '',
+               name: cols.length >= 2 ? cols[1].trim() : cols[0].trim()
+           };
+        }).filter(item => item.name);
 
         setTeachers(prev => {
           let newTeachers = [...prev];
           newTeachers.forEach(t => {
-             const idx = sortNames.indexOf(t.name);
-             t.sortOrder = idx >= 0 ? idx : 9999;
+             const found = sortData.find(s => s.name === t.name);
+             if (found) {
+                 t.sortOrder = sortData.indexOf(found);
+                 t.title = found.title || t.title;
+             } else {
+                 t.sortOrder = 9999;
+             }
           });
           newTeachers.sort((a, b) => {
              const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
@@ -459,7 +469,7 @@ export default function SubstitutionApp() {
           newTeachers.forEach((t, i) => t.sortOrder = i);
           return newTeachers;
         });
-        showAlert("成功", "老師排序已成功匯入！");
+        showAlert("成功", "老師排序及職銜已成功匯入！");
       } catch (err) { showAlert("錯誤", "排序匯入失敗，請檢查格式。"); }
       e.target.value = '';
     };
@@ -498,7 +508,7 @@ export default function SubstitutionApp() {
              const name = cols[0].trim();
              const idx = newTeachers.findIndex(t => t.name === name);
              if(idx >= 0) newTeachers[idx] = {...newTeachers[idx], absences: parseInt(cols[1])||0, substitutions: parseInt(cols[2])||0};
-             else newTeachers.push({id: Date.now()+i, name, absences: parseInt(cols[1])||0, substitutions: parseInt(cols[2])||0, freePeriods:[], masterSchedule:{}, scheduleDetails:{}, sortOrder: 9999});
+             else newTeachers.push({id: Date.now()+i, title: "", name, absences: parseInt(cols[1])||0, substitutions: parseInt(cols[2])||0, freePeriods:[], masterSchedule:{}, scheduleDetails:{}, sortOrder: 9999});
              count++;
           }
         } else if (type === 'timetable') {
@@ -516,7 +526,7 @@ export default function SubstitutionApp() {
           }
           newTeachers = newTeachers.map(t => (scheduleMap[t.name] ? { ...t, masterSchedule: scheduleMap[t.name], scheduleDetails: detailsMap[t.name] || {} } : t));
           Object.keys(scheduleMap).forEach(name => {
-             if(!newTeachers.find(t => t.name === name)) newTeachers.push({ id: Date.now()+Math.random(), name, freePeriods:[], absences:0, substitutions:0, masterSchedule: scheduleMap[name], scheduleDetails: detailsMap[name] || {}, sortOrder: 9999 });
+             if(!newTeachers.find(t => t.name === name)) newTeachers.push({ id: Date.now()+Math.random(), title: "", name, freePeriods:[], absences:0, substitutions:0, masterSchedule: scheduleMap[name], scheduleDetails: detailsMap[name] || {}, sortOrder: 9999 });
           });
         }
         setTeachers(newTeachers); showAlert("匯入成功", `已處理 ${count} 筆資料。請手動上傳雲端保存。`);
@@ -623,7 +633,7 @@ export default function SubstitutionApp() {
               <label className="text-sm font-medium text-purple-700">2. 缺席老師</label>
               <select value={absentTeacherId} onChange={e => setAbsentTeacherId(e.target.value)} className="w-full p-2 border border-purple-200 rounded-lg bg-white focus:ring-2 focus:ring-purple-400 outline-none transition-all">
                 <option value="">-- 請選擇 --</option>
-                {sortedTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                {sortedTeachers.map(t => <option key={t.id} value={t.id}>{t.title ? `[${t.title}] ` : ''}{t.name}</option>)}
               </select>
             </div>
             <div>
@@ -653,11 +663,12 @@ export default function SubstitutionApp() {
               <div className="overflow-hidden rounded-xl border border-purple-100 shadow-sm">
                 <table className="min-w-full bg-white text-sm">
                   <thead className="bg-gradient-to-r from-purple-50 to-pink-50 text-purple-900">
-                    <tr><th className="p-3 text-left">姓名</th><th className="p-3 text-center">剩餘空堂</th><th className="p-3 text-center">代課</th><th className="p-3 text-center">缺課</th><th className="p-3 text-center">操作</th></tr>
+                    <tr><th className="p-3 text-left w-16">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-center">剩餘空堂</th><th className="p-3 text-center">代課</th><th className="p-3 text-center">缺課</th><th className="p-3 text-center">操作</th></tr>
                   </thead>
                   <tbody className="divide-y divide-purple-50">
                     {list.map(t => (
                       <tr key={t.id} className={`hover:bg-purple-50 transition-colors ${t.isExtractable ? 'bg-orange-50 hover:bg-orange-100' : ''} ${t.isCore && !t.isExtractable ? 'bg-green-50 hover:bg-green-100' : ''}`}>
+                        <td className="p-3 text-gray-500 text-xs align-top pt-4">{t.title || '-'}</td>
                         <td className="p-3 font-medium">
                           {t.name}
                           {t.isPriorityTarget && <div className="text-xs text-purple-600 font-bold flex items-center mt-1"><Star size={10} className="mr-1 fill-purple-600"/> 本班支援</div>}
@@ -698,12 +709,13 @@ export default function SubstitutionApp() {
         </div>
       </div>
       <form onSubmit={addTeacher} className="flex gap-2">
+        <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="職銜 (可留空)" className="border border-purple-200 p-2 rounded-lg w-28 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
         <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="新老師姓名" className="border border-purple-200 p-2 rounded-lg flex-1 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
         <button className="bg-fuchsia-600 text-white px-4 rounded-lg hover:bg-fuchsia-700 shadow"><Plus/></button>
       </form>
       <div className="overflow-x-auto rounded-xl border border-purple-100">
         <table className="w-full text-sm">
-          <thead className="bg-purple-50 text-purple-900"><tr><th className="p-3 text-center w-16">排序</th><th className="p-3 text-left">姓名</th><th className="p-3 text-left">當日空堂</th><th className="p-3 text-center">刪除</th></tr></thead>
+          <thead className="bg-purple-50 text-purple-900"><tr><th className="p-3 text-center w-16">排序</th><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-left">當日空堂</th><th className="p-3 text-center">刪除</th></tr></thead>
           <tbody className="divide-y divide-purple-50">{getSortedTeachers(teachers).map((t, index) => (
           <tr key={t.id} className="hover:bg-purple-50 bg-white">
           <td className="p-3">
@@ -712,6 +724,7 @@ export default function SubstitutionApp() {
                 <button type="button" onClick={() => moveTeacher(index, 'down')} disabled={index===teachers.length-1} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
              </div>
           </td>
+          <td className="p-3 text-gray-500 text-xs">{t.title || '-'}</td>
           <td className="p-3 font-medium">{t.name}</td>
           <td className="p-3 flex flex-wrap gap-1">{PERIODS.map(p => <button key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${t.freePeriods.includes(p)?'bg-green-100 text-green-700 border border-green-300 font-bold':'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>)}</td>
           <td className="p-3 text-center"><button onClick={()=>deleteTeacher(t.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button></td></tr>
@@ -733,9 +746,15 @@ export default function SubstitutionApp() {
         </div>
         <div className="overflow-hidden rounded-xl border border-purple-100">
           <table className="w-full text-sm bg-white">
-            <thead className="bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white"><tr><th className="p-3 text-left">姓名</th><th className="p-3 text-center">缺課</th><th className="p-3 text-center">代課</th><th className="p-3 text-center">淨值</th></tr></thead>
+            <thead className="bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white"><tr><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-center">缺課</th><th className="p-3 text-center">代課</th><th className="p-3 text-center">淨值</th></tr></thead>
             <tbody className="divide-y divide-purple-50">{getSortedTeachers(teachers).map(t => (
-              <tr key={t.id} className="hover:bg-purple-50"><td className="p-3 font-medium">{t.name}</td><td className="p-3 text-center text-red-500 font-bold">{t.absences}</td><td className="p-3 text-center text-purple-600 font-bold">{t.substitutions}</td><td className="p-3 text-center font-medium text-gray-600">{t.substitutions - t.absences}</td></tr>
+              <tr key={t.id} className="hover:bg-purple-50">
+              <td className="p-3 text-gray-500 text-xs">{t.title || '-'}</td>
+              <td className="p-3 font-medium">{t.name}</td>
+              <td className="p-3 text-center text-red-500 font-bold">{t.absences}</td>
+              <td className="p-3 text-center text-purple-600 font-bold">{t.substitutions}</td>
+              <td className="p-3 text-center font-medium text-gray-600">{t.substitutions - t.absences}</td>
+              </tr>
             ))}</tbody>
           </table>
         </div>
@@ -769,7 +788,7 @@ export default function SubstitutionApp() {
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3.3)</h2>
+          <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 棋盤式日誌 (V3.4)</h2>
           <div className="flex items-center gap-2">
             <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded border border-gray-200 flex items-center">
               <GripHorizontal size={12} className="mr-1"/> 可拖曳互換代課
@@ -868,7 +887,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.3)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.4)...</h2>
       </div>
     );
   }
@@ -879,7 +898,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.3</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.4</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
