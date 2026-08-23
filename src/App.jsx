@@ -35,7 +35,7 @@ export default function SubstitutionApp() {
   const [currentView, setCurrentView] = useState('arrange'); 
   const [formDate, setFormDate] = useState(getInitialDate());
   
-  // V3.5-3.6 安排代課狀態
+  // 安排代課狀態
   const [newAbsentId, setNewAbsentId] = useState('');
   const [newAbsentReason, setNewAbsentReason] = useState('病假');
   const [activeCell, setActiveCell] = useState(null); 
@@ -110,7 +110,6 @@ export default function SubstitutionApp() {
   }, [teachers, logs, isCloudEnabled, isLoading]);
 
   // --- Helpers ---
-  // V3.6 修復: 確保 name 存在，避免 localeCompare 報錯
   const getSortedTeachers = (list) => [...list].sort((a, b) => {
     const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
     const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
@@ -122,7 +121,7 @@ export default function SubstitutionApp() {
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
 
-  // --- V3.5-3.6 安排缺席與代課邏輯 ---
+  // --- 安排缺席與代課邏輯 ---
   useEffect(() => { setActiveCell(null); }, [formDate]);
 
   const handleAddAbsent = () => {
@@ -187,7 +186,7 @@ export default function SubstitutionApp() {
         if (normClass && t.scheduleDetails) {
            const cls = Object.values(t.scheduleDetails).find(c => 
              c.className?.toUpperCase() === normClass && 
-             CORE_SUBJECTS.some(sub => c.subject?.toUpperCase().includes(sub))
+             CORE_SUBJECTS.some(sub => (c.subject || '').toUpperCase().includes(sub))
            );
            if(cls) { isCore = true; coreSub = cls.subject; }
         }
@@ -244,7 +243,7 @@ export default function SubstitutionApp() {
   };
   const deleteTeacher = (id) => showConfirm("刪除確認", "確定要刪除這位老師嗎？", () => setTeachers(teachers.filter(t => t.id !== id)).then(closeModal));
   
-  // V3.6 修復: 確保 freePeriods 存在，避免防呆出錯
+  // 防呆：確保 freePeriods 為陣列
   const toggleFreePeriod = (teacherId, period) => {
     setTeachers(prev => prev.map(t => {
       if (t.id === teacherId) {
@@ -335,7 +334,7 @@ export default function SubstitutionApp() {
   };
 
   const exportStatsToCSV = () => {
-    const monthLogs = logs.filter(l => l.date.startsWith(statsMonth));
+    const monthLogs = logs.filter(l => (l.date || '').startsWith(statsMonth));
     let csv = `\ufeff職銜,姓名,${statsMonth} 缺課,${statsMonth} 代課,淨值\n`;
     getSortedTeachers(teachers).forEach(t => {
       const monthAbs = monthLogs.filter(l => l.absentId === t.id).length;
@@ -367,7 +366,7 @@ export default function SubstitutionApp() {
     reader.onload = (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
-        if(data.teachers && data.logs && confirm("確定還原？")) {
+        if(data.teachers && data.logs && window.confirm("確定還原？")) {
           setTeachers(data.teachers); setLogs(data.logs); showAlert("成功", "資料已還原。");
         }
       } catch(err) { showAlert("錯誤", "檔案無效"); }
@@ -564,33 +563,50 @@ export default function SubstitutionApp() {
         </div>
       </div>
       <form onSubmit={addTeacher} className="flex gap-2">
-        <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="職銜 (可留空)" className="border border-purple-200 p-2 rounded-lg w-28 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
+        <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="職銜(可留空)" className="border border-purple-200 p-2 rounded-lg w-28 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
         <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="新老師姓名" className="border border-purple-200 p-2 rounded-lg flex-1 focus:outline-none focus:ring-2 focus:ring-purple-400"/>
         <button className="bg-fuchsia-600 text-white px-4 rounded-lg hover:bg-fuchsia-700 shadow"><Plus/></button>
       </form>
       <div className="overflow-x-auto rounded-xl border border-purple-100">
         <table className="w-full text-sm">
-          <thead className="bg-purple-50 text-purple-900"><tr><th className="p-3 text-center w-16">排序</th><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-left">當日空堂</th><th className="p-3 text-center">刪除</th></tr></thead>
-          <tbody className="divide-y divide-purple-50">{getSortedTeachers(teachers).map((t, index) => (
-          <tr key={t.id} className="hover:bg-purple-50 bg-white">
-          <td className="p-3">
-             <div className="flex flex-col gap-1 items-center justify-center">
-                <button type="button" onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button>
-                <button type="button" onClick={() => moveTeacher(index, 'down')} disabled={index===teachers.length-1} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
-             </div>
-          </td>
-          <td className="p-3 text-gray-500 text-xs">{t.title || '-'}</td>
-          <td className="p-3 font-medium">{t.name}</td>
-          <td className="p-3 flex flex-wrap gap-1">{PERIODS.map(p => <button key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t.freePeriods || []).includes(p)?'bg-green-100 text-green-700 border border-green-300 font-bold':'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>)}</td>
-          <td className="p-3 text-center"><button onClick={()=>deleteTeacher(t.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button></td></tr>
-        ))}</tbody></table>
+          <thead className="bg-purple-50 text-purple-900">
+            <tr>
+              <th className="p-3 text-center w-16">排序</th>
+              <th className="p-3 text-left w-20">職銜</th>
+              <th className="p-3 text-left">姓名</th>
+              <th className="p-3 text-left">當日空堂</th>
+              <th className="p-3 text-center">刪除</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-purple-50">
+            {getSortedTeachers(teachers).map((t, index) => (
+              <tr key={t.id} className="hover:bg-purple-50 bg-white">
+                <td className="p-3 text-center">
+                  <div className="flex flex-col gap-1 items-center justify-center">
+                    <button type="button" onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button>
+                    <button type="button" onClick={() => moveTeacher(index, 'down')} disabled={index===teachers.length-1} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
+                  </div>
+                </td>
+                <td className="p-3 text-gray-500 font-medium text-xs">{t.title || '-'}</td>
+                <td className="p-3 font-medium">{t.name}</td>
+                <td className="p-3 flex flex-wrap gap-1">
+                  {PERIODS.map(p => (
+                    <button key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t.freePeriods || []).includes(p)?'bg-green-100 text-green-700 border border-green-300 font-bold':'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>
+                  ))}
+                </td>
+                <td className="p-3 text-center">
+                  <button onClick={()=>deleteTeacher(t.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
 
   const renderStatsView = () => {
-    // V3.6：動態計算當月統計
-    const monthLogs = logs.filter(l => l.date.startsWith(statsMonth));
+    const monthLogs = logs.filter(l => (l.date || '').startsWith(statsMonth));
     const statsData = getSortedTeachers(teachers).map(t => {
       const monthAbs = monthLogs.filter(l => l.absentId === t.id).length;
       const monthSubs = monthLogs.filter(l => l.subId === t.id).length;
@@ -639,7 +655,6 @@ export default function SubstitutionApp() {
   };
 
   const renderReportView = () => {
-    // V3.6：每日紀錄名單
     const dailyLogs = logs.filter(l => l.date === formDate).sort((a,b) => a.period - b.period);
     const uniqueAbsents = [...new Set(dailyLogs.map(l => l.absentName))];
 
@@ -657,7 +672,7 @@ export default function SubstitutionApp() {
           <h3 className="font-bold text-red-800 border-l-4 border-red-500 pl-2 mb-3">今日缺席名單 ({uniqueAbsents.length}人)</h3>
           <div className="flex flex-wrap gap-2">
             {uniqueAbsents.map(name => {
-               const reason = dailyLogs.find(l => l.absentName === name)?.reason;
+               const reason = dailyLogs.find(l => l.absentName === name)?.reason || '其他';
                return <span key={name} className="bg-white text-red-700 px-3 py-1.5 rounded-lg shadow-sm font-medium border border-red-100">{name} <span className="text-xs text-gray-500 ml-1">({reason})</span></span>;
             })}
             {uniqueAbsents.length === 0 && <span className="text-gray-400 text-sm">本日無缺席紀錄</span>}
@@ -700,7 +715,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.6)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.7)...</h2>
       </div>
     );
   }
@@ -709,9 +724,9 @@ export default function SubstitutionApp() {
     <div className="min-h-screen bg-fuchsia-50 font-sans text-gray-800 pb-10 selection:bg-fuchsia-200">
       {renderModal()}
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
-        <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
+        <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.6</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.7</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
