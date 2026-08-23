@@ -355,10 +355,10 @@ export default function SubstitutionApp() {
     });
   };
 
-  const handleCSVImport = (e, type) => {
+  const handleCSVImport = async (e, type) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
         const rows = ev.target.result.split('\n').map(r => r.trim()).filter(r => r);
         let newTeachers = [...(Array.isArray(teachers)?teachers:[])];
@@ -374,18 +374,42 @@ export default function SubstitutionApp() {
              if(!detailsMap[name]) detailsMap[name] = {};
              detailsMap[name][`${day}-${period}`] = { className: (cols[3]||'').trim().toUpperCase(), subject: (cols[4]||'').trim(), isSupport: ['是','y','yes'].includes((cols[5]||'').trim().toLowerCase()) };
           }
-          newTeachers = newTeachers.map(t => (scheduleMap[t.name] ? { ...t, masterSchedule: scheduleMap[t.name], scheduleDetails: detailsMap[t.name] || {} } : t));
+          // V4.1: 清除所有舊課表，避免重覆，並確保沒有在 CSV 內的老師課表被清空
+          newTeachers = newTeachers.map(t => ({ 
+              ...t, 
+              masterSchedule: scheduleMap[t.name] || {}, 
+              scheduleDetails: detailsMap[t.name] || {} 
+          }));
           Object.keys(scheduleMap).forEach(name => {
              if(!newTeachers.find(t => t.name === name)) newTeachers.push({ id: Date.now()+Math.random(), title: "", name, freePeriods:[], masterSchedule: scheduleMap[name], scheduleDetails: detailsMap[name] || {}, sortOrder: 9999 });
           });
         }
-        setTeachers(newTeachers); showAlert("匯入成功", "課表已成功更新。");
-      } catch (err) { showAlert("錯誤", "格式有誤"); }
+        setTeachers(newTeachers);
+        
+        // V4.1: 立即強制上載至 Firebase 避免更新時資料重覆
+        if (isCloudEnabled && dbRef.current) {
+            setSaveStatus('saving');
+            const safeLogs = Array.isArray(logs) ? logs : [];
+            try {
+                await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
+                    teachers: newTeachers,
+                    logs: safeLogs,
+                    lastUpdated: new Date().toISOString()
+                });
+                setLastSaved(new Date());
+                setSaveStatus('idle');
+            } catch (err) {
+                console.error(err);
+                setSaveStatus('error');
+            }
+        }
+        
+        showAlert("匯入成功", "舊課表資料已清除，新課表已成功更新並上載至雲端。");
+      } catch (err) { showAlert("錯誤", "格式有誤或上載失敗"); setSaveStatus('error'); }
       e.target.value = '';
     };
     reader.readAsText(file);
   };
-
   const exportStatsToCSV = () => {
     const safeLogs = Array.isArray(logs) ? logs : [];
     const monthLogs = safeLogs.filter(l => (l?.date || '').startsWith(statsMonth));
@@ -778,7 +802,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.0)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.1)...</h2>
       </div>
     );
   }
@@ -789,7 +813,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.0</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.1</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
