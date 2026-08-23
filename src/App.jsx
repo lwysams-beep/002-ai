@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, GripHorizontal, FileWarning } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, FileWarning } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 // --- 常數設定 ---
@@ -53,7 +53,7 @@ export default function SubstitutionApp() {
 
   const [modal, setModal] = useState({ isOpen: false, type: 'info', title: '', message: '', onConfirm: null });
 
-  // --- 初始化 ---
+  // --- 初始化 (加入極強防呆) ---
   useEffect(() => {
     const initData = async () => {
       setIsLoading(true);
@@ -69,39 +69,56 @@ export default function SubstitutionApp() {
           const docSnap = await getDoc(docRef);
           if (docSnap.exists()) {
             const data = docSnap.data();
-            setTeachers(data.teachers || []);
-            setLogs(data.logs || []);
+            setTeachers(Array.isArray(data.teachers) ? data.teachers : []);
+            setLogs(Array.isArray(data.logs) ? data.logs : []);
             setLastSaved(data.lastUpdated ? new Date(data.lastUpdated) : new Date());
             loadedFromCloud = true;
             setIsCloudEnabled(true); 
-          } else setIsCloudEnabled(true); 
+          } else {
+            setIsCloudEnabled(true); 
+          }
         } catch (error) { setIsCloudEnabled(false); }
       }
 
       if (!loadedFromCloud) {
         let localTeachers = localStorage.getItem(STORAGE_KEY_TEACHERS);
         let localLogs = localStorage.getItem(STORAGE_KEY_LOGS);
-        if (localTeachers) setTeachers(JSON.parse(localTeachers));
-        else setTeachers([{ id: 1, title: "", name: "陳大文", freePeriods: [], masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
-        if (localLogs) setLogs(JSON.parse(localLogs));
+        
+        if (localTeachers) {
+          try {
+            const parsed = JSON.parse(localTeachers);
+            setTeachers(Array.isArray(parsed) ? parsed : []);
+          } catch(e) { setTeachers([]); }
+        } else {
+          setTeachers([{ id: 1, title: "", name: "陳大文", freePeriods: [], masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
+        }
+        
+        if (localLogs) {
+          try {
+            const parsed = JSON.parse(localLogs);
+            setLogs(Array.isArray(parsed) ? parsed : []);
+          } catch(e) { setLogs([]); }
+        }
       }
       setIsLoading(false);
     };
     initData();
   }, []);
 
-  // --- 自動儲存 ---
+  // --- 自動儲存 (加入安全陣列驗證) ---
   useEffect(() => {
     if (isLoading) return;
-    localStorage.setItem(STORAGE_KEY_TEACHERS, JSON.stringify(teachers));
-    localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(logs));
+    const safeTeachers = Array.isArray(teachers) ? teachers : [];
+    const safeLogs = Array.isArray(logs) ? logs : [];
+    localStorage.setItem(STORAGE_KEY_TEACHERS, JSON.stringify(safeTeachers));
+    localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(safeLogs));
 
     const timer = setTimeout(async () => {
       if (isCloudEnabled && dbRef.current) {
         try {
           await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
-            teachers: teachers, 
-            logs: logs, 
+            teachers: safeTeachers, 
+            logs: safeLogs, 
             lastUpdated: new Date().toISOString()
           });
           setLastSaved(new Date());
@@ -133,11 +150,13 @@ export default function SubstitutionApp() {
 
   const handleAddAbsent = () => {
     if (!newAbsentId) return showAlert("提示", "請選擇缺席老師");
-    const t = teachers.find(x => x.id == newAbsentId);
+    const safeTeachers = Array.isArray(teachers) ? teachers : [];
+    const safeLogs = Array.isArray(logs) ? logs : [];
+    const t = safeTeachers.find(x => x.id == newAbsentId);
     if (!t) return;
     const dayOfWeek = new Date(formDate).getDay();
     const busy = t.masterSchedule?.[dayOfWeek] || [];
-    const existing = logs.filter(l => l.date === formDate && l.absentId == newAbsentId).map(l => l.period);
+    const existing = safeLogs.filter(l => l?.date === formDate && l?.absentId == newAbsentId).map(l => l.period);
     
     const newLogs = [];
     busy.forEach(p => {
@@ -158,22 +177,24 @@ export default function SubstitutionApp() {
       }
     });
     
-    if (newLogs.length > 0) setLogs(prev => [...newLogs, ...prev]);
+    if (newLogs.length > 0) setLogs(prev => [...(Array.isArray(prev)?prev:[]), ...newLogs]);
     else showAlert("提示", "該老師今日無排定課堂，或已全數加入缺席名單。");
     setNewAbsentId('');
   };
 
   const getAvailableTeachers = () => {
     if (!activeCell) return [];
+    const safeTeachers = Array.isArray(teachers) ? teachers : [];
+    const safeLogs = Array.isArray(logs) ? logs : [];
     const p = activeCell.period;
     const dayOfWeek = new Date(formDate).getDay();
     const targetKey = `${dayOfWeek}-${p}`; 
     const normClass = (activeCell.className || '').trim().toUpperCase();
-    const dailyLogs = logs.filter(l => l.date === formDate);
+    const dailyLogs = safeLogs.filter(l => l?.date === formDate);
 
-    return teachers
+    return safeTeachers
       .map(t => {
-        const subbedPeriods = dailyLogs.filter(log => log.subId == t.id).map(log => log.period);
+        const subbedPeriods = dailyLogs.filter(log => log?.subId == t.id).map(log => log?.period);
         const actualFreePeriods = (t.freePeriods || []).filter(fp => !subbedPeriods.includes(fp));
         const dailySubCount = subbedPeriods.length;
         return { ...t, actualFreePeriods, subbedPeriods, dailySubCount };
@@ -215,7 +236,9 @@ export default function SubstitutionApp() {
   };
 
   const handleAssignSub = (subTeacherId, isExtracting) => {
-    const subT = teachers.find(t => t.id == subTeacherId);
+    const safeTeachers = Array.isArray(teachers) ? teachers : [];
+    const subT = safeTeachers.find(t => t.id == subTeacherId);
+    if (!subT) return;
     let note = '';
     if (isExtracting) {
         const p = activeCell.period;
@@ -223,17 +246,17 @@ export default function SubstitutionApp() {
         const detail = subT?.scheduleDetails?.[`${dayOfWeek}-${p}`];
         note = detail?.className ? `(${detail.className}不抽離)` : `(支援課堂不抽離)`;
     }
-    setLogs(prev => prev.map(l => l.id === activeCell.logId ? { ...l, subId: subT.id, subName: subT.name, note } : l));
+    setLogs(prev => (Array.isArray(prev)?prev:[]).map(l => l.id === activeCell.logId ? { ...l, subId: subT.id, subName: subT.name, note } : l));
     setActiveCell(null);
   };
 
   const handleRemoveSub = () => {
-    setLogs(prev => prev.map(l => l.id === activeCell.logId ? { ...l, subId: null, subName: null, note: '' } : l));
+    setLogs(prev => (Array.isArray(prev)?prev:[]).map(l => l.id === activeCell.logId ? { ...l, subId: null, subName: null, note: '' } : l));
     setActiveCell(prev => ({...prev, subId: null, subName: null, note: ''}));
   };
 
   const handleDeleteLog = () => {
-    setLogs(prev => prev.filter(l => l.id !== activeCell.logId));
+    setLogs(prev => (Array.isArray(prev)?prev:[]).filter(l => l.id !== activeCell.logId));
     setActiveCell(null);
   };
 
@@ -241,17 +264,17 @@ export default function SubstitutionApp() {
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
-      setTeachers(prev => [...prev, { id: Date.now(), title: newTitle.trim(), name: newName.trim(), freePeriods: [], masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
+      setTeachers(prev => [...(Array.isArray(prev)?prev:[]), { id: Date.now(), title: newTitle.trim(), name: newName.trim(), freePeriods: [], masterSchedule: {}, scheduleDetails: {}, sortOrder: 9999 }]);
       setNewTitle(''); setNewName('');
     }
   };
   const deleteTeacher = (id) => showConfirm("刪除確認", "確定要刪除這位老師嗎？", () => {
-    setTeachers(prev => prev.filter(t => t.id !== id));
+    setTeachers(prev => (Array.isArray(prev)?prev:[]).filter(t => t.id !== id));
     closeModal();
   });
   
   const toggleFreePeriod = (teacherId, period) => {
-    setTeachers(prev => prev.map(t => {
+    setTeachers(prev => (Array.isArray(prev)?prev:[]).map(t => {
       if (t.id === teacherId) {
         const fp = Array.isArray(t.freePeriods) ? t.freePeriods : [];
         return { ...t, freePeriods: fp.includes(period) ? fp.filter(p => p !== period) : [...fp, period].sort((a, b) => a - b) };
@@ -273,7 +296,7 @@ export default function SubstitutionApp() {
         }).filter(item => item.name);
 
         setTeachers(prev => {
-          let newTeachers = [...prev];
+          let newTeachers = [...(Array.isArray(prev)?prev:[])];
           newTeachers.forEach(t => {
              const found = sortData.find(s => s.name === t.name);
              if (found) { t.sortOrder = sortData.indexOf(found); t.title = found.title || t.title; } 
@@ -314,7 +337,7 @@ export default function SubstitutionApp() {
     reader.onload = (ev) => {
       try {
         const rows = ev.target.result.split('\n').map(r => r.trim()).filter(r => r);
-        let newTeachers = [...teachers];
+        let newTeachers = [...(Array.isArray(teachers)?teachers:[])];
         if (type === 'timetable') {
           const scheduleMap = {}; const detailsMap = {};
           for (let i=1; i<rows.length; i++) {
@@ -340,15 +363,24 @@ export default function SubstitutionApp() {
   };
 
   const exportStatsToCSV = () => {
-    const monthLogs = logs.filter(l => (l.date || '').startsWith(statsMonth));
+    const safeLogs = Array.isArray(logs) ? logs : [];
+    const monthLogs = safeLogs.filter(l => (l?.date || '').startsWith(statsMonth));
     let csv = `\ufeff職銜,姓名,${statsMonth} 缺課,${statsMonth} 代課,淨值\n`;
     getSortedTeachers(teachers).forEach(t => {
-      const monthAbs = monthLogs.filter(l => l.absentId === t.id).length;
-      const monthSubs = monthLogs.filter(l => l.subId === t.id).length;
-      csv += `${t.title||''},${t.name||''},${monthAbs},${monthSubs},${monthSubs - monthAbs}\n`;
+      const monthAbs = monthLogs.filter(l => l?.absentId === t.id).length;
+      const monthSubs = monthLogs.filter(l => l?.subId === t.id).length;
+      csv += `${t?.title||''},${t?.name||''},${monthAbs},${monthSubs},${monthSubs - monthAbs}\n`;
     });
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a'); link.href = url; link.setAttribute('download', `stats_${statsMonth}.csv`);
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  };
+
+  const downloadTimetableTemplate = () => {
+    const csvContent = "\ufeff姓名,星期(1-5),節次(1-9),班級(重要),科目,是否入班(是/否)\n陳大文,1,1,3A,數學,否\n陳大文,1,2,3A,數學,否\n李小美,1,1,3A,數學支援,是\n李小美,1,3,1C,英文,否";
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.setAttribute('download', 'timetable_template_v3.csv');
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
@@ -365,7 +397,9 @@ export default function SubstitutionApp() {
       try {
         const data = JSON.parse(ev.target.result);
         if(data.teachers && data.logs && window.confirm("確定還原？")) {
-          setTeachers(data.teachers); setLogs(data.logs); showAlert("成功", "資料已還原。");
+          setTeachers(Array.isArray(data.teachers)?data.teachers:[]); 
+          setLogs(Array.isArray(data.logs)?data.logs:[]); 
+          showAlert("成功", "資料已還原。");
         }
       } catch(err) { showAlert("錯誤", "檔案無效"); }
       e.target.value = '';
@@ -396,16 +430,18 @@ export default function SubstitutionApp() {
   };
 
   const renderArrangeView = () => {
-    const dailyLogs = logs.filter(l => l.date === formDate);
-    const uniqueAbsentIds = [...new Set(dailyLogs.map(l => l.absentId))];
+    const safeLogs = Array.isArray(logs) ? logs : [];
+    const dailyLogs = safeLogs.filter(l => l?.date === formDate);
+    const uniqueAbsentIds = [...new Set(dailyLogs.map(l => l?.absentId))].filter(Boolean);
     const absentCols = uniqueAbsentIds.map(id => {
-      const log = dailyLogs.find(l => l.absentId === id);
-      return { id, name: log?.absentName, reason: log?.reason };
+      const log = dailyLogs.find(l => l?.absentId === id);
+      return { id, name: log?.absentName || '未知', reason: log?.reason || '其他' };
     });
     const sortedTeachers = getSortedTeachers(teachers);
 
     return (
       <div className="flex flex-col md:flex-row gap-4 h-[75vh]">
+        {/* 左側：推薦名單與操作 (佔 30%) */}
         <div className="w-full md:w-1/3 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full overflow-hidden animate-in fade-in slide-in-from-left-4">
           <h3 className="font-bold text-lg text-purple-900 mb-3 border-b border-purple-100 pb-2 flex items-center">
             <Star className="mr-2 text-fuchsia-500" size={18}/> 安排操作
@@ -428,7 +464,7 @@ export default function SubstitutionApp() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setActiveCell(prev => ({...prev, className: val}));
-                      setLogs(prev => prev.map(l => l.id === activeCell.logId ? {...l, className: val} : l));
+                      setLogs(prev => (Array.isArray(prev)?prev:[]).map(l => l.id === activeCell.logId ? {...l, className: val} : l));
                     }}
                     className="border p-1 rounded w-20 text-xs outline-none focus:border-purple-400 bg-white"
                   />
@@ -467,6 +503,7 @@ export default function SubstitutionApp() {
           )}
         </div>
 
+        {/* 右側：並列表格 (佔 70%) */}
         <div className="flex-1 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full animate-in fade-in slide-in-from-right-4">
            <div className="flex flex-wrap gap-3 items-end mb-4 border-b border-gray-100 pb-4">
               <div>
@@ -546,7 +583,7 @@ export default function SubstitutionApp() {
   };
 
   const renderTeachersView = () => {
-    const sorted = getSortedTeachers(teachers);
+    const sortedTeachers = getSortedTeachers(teachers);
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4 animate-in fade-in zoom-in duration-300">
         <div className="flex flex-wrap justify-between items-center gap-2">
@@ -577,19 +614,19 @@ export default function SubstitutionApp() {
               </tr>
             </thead>
             <tbody className="divide-y divide-purple-50">
-              {sorted.map((t, index, arr) => (
+              {sortedTeachers.map((t, index) => (
                 <tr key={t?.id || index} className="hover:bg-purple-50 bg-white">
                   <td className="p-3 text-center">
                     <div className="flex flex-col gap-1 items-center justify-center">
                       <button type="button" onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button>
-                      <button type="button" onClick={() => moveTeacher(index, 'down')} disabled={index===(arr.length-1)} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
+                      <button type="button" onClick={() => moveTeacher(index, 'down')} disabled={index===(sortedTeachers.length-1)} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
                     </div>
                   </td>
                   <td className="p-3 text-gray-500 font-medium text-xs">{t?.title || '-'}</td>
                   <td className="p-3 font-medium">{t?.name || '未知'}</td>
                   <td className="p-3 flex flex-wrap gap-1">
                     {PERIODS.map(p => (
-                      <button type="button" key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t?.freePeriods || []).includes(p) ? 'bg-green-100 text-green-700 border border-green-300 font-bold' : 'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>
+                      <button type="button" key={p} onClick={()=>toggleFreePeriod(t?.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t?.freePeriods || []).includes(p) ? 'bg-green-100 text-green-700 border border-green-300 font-bold' : 'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>
                     ))}
                   </td>
                   <td className="p-3 text-center">
@@ -597,7 +634,7 @@ export default function SubstitutionApp() {
                   </td>
                 </tr>
               ))}
-              {sorted.length === 0 && <tr><td colSpan="5" className="p-6 text-center text-gray-400">目前沒有任何教師資料</td></tr>}
+              {sortedTeachers.length === 0 && <tr><td colSpan="5" className="p-6 text-center text-gray-400">目前沒有任何教師資料，請新增或匯入資料</td></tr>}
             </tbody>
           </table>
         </div>
@@ -606,10 +643,11 @@ export default function SubstitutionApp() {
   };
 
   const renderStatsView = () => {
-    const monthLogs = logs.filter(l => (l.date || '').startsWith(statsMonth));
+    const safeLogs = Array.isArray(logs) ? logs : [];
+    const monthLogs = safeLogs.filter(l => (l?.date || '').startsWith(statsMonth));
     const statsData = getSortedTeachers(teachers).map(t => {
-      const monthAbs = monthLogs.filter(l => l.absentId === t.id).length;
-      const monthSubs = monthLogs.filter(l => l.subId === t.id).length;
+      const monthAbs = monthLogs.filter(l => l?.absentId === t?.id).length;
+      const monthSubs = monthLogs.filter(l => l?.subId === t?.id).length;
       return { ...t, monthAbs, monthSubs };
     });
 
@@ -630,12 +668,12 @@ export default function SubstitutionApp() {
             <table className="w-full text-sm bg-white">
               <thead className="bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white"><tr><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-center">{statsMonth} 缺課</th><th className="p-3 text-center">{statsMonth} 代課</th><th className="p-3 text-center">淨值</th></tr></thead>
               <tbody className="divide-y divide-purple-50">{statsData.map(t => (
-                <tr key={t.id} className="hover:bg-purple-50">
-                <td className="p-3 text-gray-500 text-xs">{t.title || '-'}</td>
-                <td className="p-3 font-medium">{t.name}</td>
-                <td className="p-3 text-center text-red-500 font-bold">{t.monthAbs}</td>
-                <td className="p-3 text-center text-purple-600 font-bold">{t.monthSubs}</td>
-                <td className={`p-3 text-center font-bold ${t.monthSubs - t.monthAbs > 0 ? 'text-green-600' : t.monthSubs - t.monthAbs < 0 ? 'text-orange-500' : 'text-gray-400'}`}>{t.monthSubs - t.monthAbs > 0 ? '+' : ''}{t.monthSubs - t.monthAbs}</td>
+                <tr key={t?.id || Math.random()} className="hover:bg-purple-50">
+                <td className="p-3 text-gray-500 text-xs">{t?.title || '-'}</td>
+                <td className="p-3 font-medium">{t?.name || '未知'}</td>
+                <td className="p-3 text-center text-red-500 font-bold">{t?.monthAbs || 0}</td>
+                <td className="p-3 text-center text-purple-600 font-bold">{t?.monthSubs || 0}</td>
+                <td className={`p-3 text-center font-bold ${(t?.monthSubs || 0) - (t?.monthAbs || 0) > 0 ? 'text-green-600' : (t?.monthSubs || 0) - (t?.monthAbs || 0) < 0 ? 'text-orange-500' : 'text-gray-400'}`}>{(t?.monthSubs || 0) - (t?.monthAbs || 0) > 0 ? '+' : ''}{(t?.monthSubs || 0) - (t?.monthAbs || 0)}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -655,8 +693,9 @@ export default function SubstitutionApp() {
   };
 
   const renderReportView = () => {
-    const dailyLogs = logs.filter(l => l.date === formDate).sort((a,b) => a.period - b.period);
-    const uniqueAbsents = [...new Set(dailyLogs.map(l => l.absentName))];
+    const safeLogs = Array.isArray(logs) ? logs : [];
+    const dailyLogs = safeLogs.filter(l => l?.date === formDate).sort((a,b) => (a?.period||0) - (b?.period||0));
+    const uniqueAbsents = [...new Set(dailyLogs.map(l => l?.absentName))].filter(Boolean);
 
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
@@ -672,7 +711,7 @@ export default function SubstitutionApp() {
           <h3 className="font-bold text-red-800 border-l-4 border-red-500 pl-2 mb-3">今日缺席名單 ({uniqueAbsents.length}人)</h3>
           <div className="flex flex-wrap gap-2">
             {uniqueAbsents.map(name => {
-               const reason = dailyLogs.find(l => l.absentName === name)?.reason || '其他';
+               const reason = dailyLogs.find(l => l?.absentName === name)?.reason || '其他';
                return <span key={name} className="bg-white text-red-700 px-3 py-1.5 rounded-lg shadow-sm font-medium border border-red-100">{name} <span className="text-xs text-gray-500 ml-1">({reason})</span></span>;
             })}
             {uniqueAbsents.length === 0 && <span className="text-gray-400 text-sm">本日無缺席紀錄</span>}
@@ -694,12 +733,12 @@ export default function SubstitutionApp() {
               </thead>
               <tbody className="divide-y divide-purple-50">
                 {dailyLogs.map(l => (
-                  <tr key={l.id} className="hover:bg-purple-50 transition-colors text-center">
-                    <td className="p-3 font-bold text-purple-700">{l.period}</td>
-                    <td className="p-3">{l.className || '-'}</td>
-                    <td className="p-3 text-red-500 font-medium">{l.absentName}</td>
-                    <td className="p-3 font-bold text-green-600">{l.subName || '未安排'}</td>
-                    <td className="p-3 text-xs text-orange-500 text-left">{l.note}</td>
+                  <tr key={l?.id || Math.random()} className="hover:bg-purple-50 transition-colors text-center">
+                    <td className="p-3 font-bold text-purple-700">{l?.period || '-'}</td>
+                    <td className="p-3">{l?.className || '-'}</td>
+                    <td className="p-3 text-red-500 font-medium">{l?.absentName || '未知'}</td>
+                    <td className="p-3 font-bold text-green-600">{l?.subName || '未安排'}</td>
+                    <td className="p-3 text-xs text-orange-500 text-left">{l?.note || ''}</td>
                   </tr>
                 ))}
                 {dailyLogs.length === 0 && <tr><td colSpan="5" className="p-8 text-gray-400 text-center border-dashed border-2">本日無需要代課的節次</td></tr>}
@@ -715,7 +754,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.8)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.9)...</h2>
       </div>
     );
   }
@@ -726,7 +765,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.8</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.9</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
