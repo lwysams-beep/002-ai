@@ -24,7 +24,7 @@ const getInitialDate = () => {
 export default function SubstitutionApp() {
   // --- 狀態管理 ---
   const [teachers, setTeachers] = useState([]);
-  const [logs, setLogs] = useState([]); // Schema: { id, date, period, className, absentName, absentId, reason, subName, subId, note, timestamp }
+  const [logs, setLogs] = useState([]); 
   const [isCloudEnabled, setIsCloudEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [lastSaved, setLastSaved] = useState(null);
@@ -35,12 +35,12 @@ export default function SubstitutionApp() {
   const [currentView, setCurrentView] = useState('arrange'); 
   const [formDate, setFormDate] = useState(getInitialDate());
   
-  // V3.5 安排代課狀態
+  // V3.5-3.6 安排代課狀態
   const [newAbsentId, setNewAbsentId] = useState('');
   const [newAbsentReason, setNewAbsentReason] = useState('病假');
-  const [activeCell, setActiveCell] = useState(null); // { logId, absentId, absentName, reason, period, className, subId, subName, note }
+  const [activeCell, setActiveCell] = useState(null); 
   
-  // V3.5 統計月份
+  // 統計月份
   const [statsMonth, setStatsMonth] = useState(new Date().toISOString().slice(0, 7));
 
   const [newTitle, setNewTitle] = useState(''); 
@@ -110,18 +110,19 @@ export default function SubstitutionApp() {
   }, [teachers, logs, isCloudEnabled, isLoading]);
 
   // --- Helpers ---
+  // V3.6 修復: 確保 name 存在，避免 localeCompare 報錯
   const getSortedTeachers = (list) => [...list].sort((a, b) => {
     const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
     const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
     if (orderA !== orderB) return orderA - orderB;
-    return a.name.localeCompare(b.name, "zh-HK");
+    return (a.name || '').localeCompare(b.name || '', "zh-HK");
   });
 
   const showAlert = (title, message) => setModal({ isOpen: true, type: 'info', title, message });
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
 
-  // --- V3.5 安排缺席與代課邏輯 ---
+  // --- V3.5-3.6 安排缺席與代課邏輯 ---
   useEffect(() => { setActiveCell(null); }, [formDate]);
 
   const handleAddAbsent = () => {
@@ -205,7 +206,7 @@ export default function SubstitutionApp() {
         const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
         const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
         if (orderA !== orderB) return orderA - orderB;
-        return a.name.localeCompare(b.name, "zh-HK");
+        return (a.name || '').localeCompare(b.name || '', "zh-HK");
       });
   };
 
@@ -242,7 +243,17 @@ export default function SubstitutionApp() {
     }
   };
   const deleteTeacher = (id) => showConfirm("刪除確認", "確定要刪除這位老師嗎？", () => setTeachers(teachers.filter(t => t.id !== id)).then(closeModal));
-  const toggleFreePeriod = (teacherId, period) => setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, freePeriods: t.freePeriods.includes(period) ? t.freePeriods.filter(p => p !== period) : [...t.freePeriods, period].sort((a, b) => a - b) } : t));
+  
+  // V3.6 修復: 確保 freePeriods 存在，避免防呆出錯
+  const toggleFreePeriod = (teacherId, period) => {
+    setTeachers(prev => prev.map(t => {
+      if (t.id === teacherId) {
+        const fp = t.freePeriods || [];
+        return { ...t, freePeriods: fp.includes(period) ? fp.filter(p => p !== period) : [...fp, period].sort((a, b) => a - b) };
+      }
+      return t;
+    }));
+  };
 
   // --- 匯入匯出 ---
   const handleSortImport = (e) => {
@@ -267,7 +278,7 @@ export default function SubstitutionApp() {
              const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
              const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
              if (orderA !== orderB) return orderA - orderB;
-             return a.name.localeCompare(b.name, "zh-HK");
+             return (a.name || '').localeCompare(b.name || '', "zh-HK");
           });
           newTeachers.forEach((t, i) => t.sortOrder = i);
           return newTeachers;
@@ -334,6 +345,35 @@ export default function SubstitutionApp() {
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a'); link.href = url; link.setAttribute('download', `stats_${statsMonth}.csv`);
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  };
+
+  const downloadTimetableTemplate = () => {
+    const csvContent = "\ufeff姓名,星期(1-5),節次(1-9),班級(重要),科目,是否入班(是/否)\n陳大文,1,1,3A,數學,否\n陳大文,1,2,3A,數學,否\n李小美,1,1,3A,數學支援,是\n李小美,1,3,1C,英文,否";
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.setAttribute('download', 'timetable_template_v2.csv');
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  };
+
+  const downloadBackup = () => {
+    const url = URL.createObjectURL(new Blob([JSON.stringify({ teachers, logs, backupDate: new Date().toISOString() }, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a'); link.href = url; link.setAttribute('download', `backup_${new Date().toISOString().slice(0,10)}.json`);
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  };
+
+  const restoreBackup = (e) => {
+    const file = e.target.files[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if(data.teachers && data.logs && confirm("確定還原？")) {
+          setTeachers(data.teachers); setLogs(data.logs); showAlert("成功", "資料已還原。");
+        }
+      } catch(err) { showAlert("錯誤", "檔案無效"); }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
   };
 
   // --- 畫面渲染 ---
@@ -517,6 +557,7 @@ export default function SubstitutionApp() {
         <div className="flex gap-2">
           <button onClick={() => sortImportRef.current.click()} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm shadow hover:bg-green-700 flex items-center"><Upload size={14} className="mr-1"/> 匯入排序</button>
           <input type="file" ref={sortImportRef} onChange={handleSortImport} className="hidden" />
+          <button onClick={downloadTimetableTemplate} className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm border border-purple-200 hover:bg-purple-100"><Download size={14} className="inline mr-1"/>範本</button>
           <button onClick={() => timetableImportRef.current.click()} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm shadow hover:bg-purple-700"><FileText size={14} className="inline mr-1"/>匯入課表</button>
           <button onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center"><Upload size={14} className="mr-1"/> 手動上傳雲端</button>
           <input type="file" ref={timetableImportRef} onChange={e => handleCSVImport(e, 'timetable')} className="hidden" />
@@ -540,7 +581,7 @@ export default function SubstitutionApp() {
           </td>
           <td className="p-3 text-gray-500 text-xs">{t.title || '-'}</td>
           <td className="p-3 font-medium">{t.name}</td>
-          <td className="p-3 flex flex-wrap gap-1">{PERIODS.map(p => <button key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${t.freePeriods.includes(p)?'bg-green-100 text-green-700 border border-green-300 font-bold':'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>)}</td>
+          <td className="p-3 flex flex-wrap gap-1">{PERIODS.map(p => <button key={p} onClick={()=>toggleFreePeriod(t.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t.freePeriods || []).includes(p)?'bg-green-100 text-green-700 border border-green-300 font-bold':'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>)}</td>
           <td className="p-3 text-center"><button onClick={()=>deleteTeacher(t.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button></td></tr>
         ))}</tbody></table>
       </div>
@@ -548,7 +589,7 @@ export default function SubstitutionApp() {
   );
 
   const renderStatsView = () => {
-    // V3.5：動態計算當月統計
+    // V3.6：動態計算當月統計
     const monthLogs = logs.filter(l => l.date.startsWith(statsMonth));
     const statsData = getSortedTeachers(teachers).map(t => {
       const monthAbs = monthLogs.filter(l => l.absentId === t.id).length;
@@ -598,7 +639,7 @@ export default function SubstitutionApp() {
   };
 
   const renderReportView = () => {
-    // V3.5：每日紀錄名單
+    // V3.6：每日紀錄名單
     const dailyLogs = logs.filter(l => l.date === formDate).sort((a,b) => a.period - b.period);
     const uniqueAbsents = [...new Set(dailyLogs.map(l => l.absentName))];
 
@@ -659,7 +700,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.5)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.6)...</h2>
       </div>
     );
   }
@@ -670,7 +711,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.5</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.6</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
