@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, FileWarning } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, Cloud, CloudOff, Loader2, Save, RefreshCw } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 // --- 常數設定 ---
@@ -170,18 +170,31 @@ export default function SubstitutionApp() {
     setNewAbsentId('');
   };
 
+  // V4.7 新增：一鍵刪除整位缺席老師
+  const handleDeleteAbsentTeacher = (absentId) => {
+    const safeTeachers = Array.isArray(teachers) ? teachers : [];
+    const t = safeTeachers.find(x => x.id === absentId);
+    const name = t ? t.name : '該老師';
+    showConfirm("刪除確認", `確定要刪除 ${name} 今日的所有缺席及代課紀錄嗎？`, () => {
+      setLogs(prev => {
+         const safeLogs = Array.isArray(prev) ? prev : [];
+         return safeLogs.filter(l => !(l.date === formDate && l.absentId === absentId));
+      });
+      if (activeCell?.absentId === absentId) setActiveCell(null);
+      closeModal();
+    });
+  };
+
   const getCategorizedTeachers = () => {
     if (!activeCell) return { recommended: [], subbedOne: [], notArranged: [] };
-    const safeTeachers = Array.isArray(teachers) ? teachers : [];
-    const safeLogs = Array.isArray(logs) ? logs : [];
     const p = activeCell.period;
     const dayOfWeek = new Date(formDate).getDay();
     const targetKey = `${dayOfWeek}-${p}`; 
     const normClass = (activeCell.className || '').trim().toUpperCase();
-    const dailyLogs = safeLogs.filter(l => l?.date === formDate);
+    const dailyLogs = (Array.isArray(logs)?logs:[]).filter(l => l?.date === formDate);
     const absentTeacherIds = [...new Set(dailyLogs.map(l => l.absentId))].filter(Boolean); 
 
-    const allMapped = safeTeachers.map(t => {
+    const allMapped = (Array.isArray(teachers)?teachers:[]).map(t => {
       const subbedLogs = dailyLogs.filter(log => log?.subId == t.id);
       const extraSubCount = subbedLogs.filter(l => !l.isSwap).length; 
       const baseFree = Array.isArray(t.freePeriods) ? t.freePeriods : [];
@@ -235,12 +248,7 @@ export default function SubstitutionApp() {
       if (a.actualFreeCount !== b.actualFreeCount) return b.actualFreeCount - a.actualFreeCount;
       return (a.name || '').localeCompare(b.name || '', "zh-HK");
     };
-
-    return {
-      recommended: recommended.sort(sorter),
-      subbedOne: subbedOne.sort(sorter),
-      notArranged: notArranged.sort(sorter)
-    };
+    return { recommended: recommended.sort(sorter), subbedOne: subbedOne.sort(sorter), notArranged: notArranged.sort(sorter) };
   };
 
   const commitAssign = (logId, subId, subName, note, isSwap) => {
@@ -250,10 +258,9 @@ export default function SubstitutionApp() {
 
   const handleAssignSub = (t) => {
     if (!t) return;
-    const p = activeCell.period;
     const dayOfWeek = new Date(formDate).getDay();
 
-    if (t.isSpecialRole && (t.isPT || t.isTA || t.rolePriority <= 4)) {
+    if (t.isPT || t.isTA) {
         if (t.currentStatus === '入班') {
             const note = `(${t.supportClass || '未知'}不入班)`;
             commitAssign(activeCell.logId, t.id, t.name, note, true);
@@ -269,8 +276,7 @@ export default function SubstitutionApp() {
             setSwapModal({ isOpen: true, logId: activeCell.logId, subTeacher: t, options, selectedOption: options[0] });
         }
     } else {
-        let note = '';
-        if (t.isSupport) note = t.supportClass ? `(${t.supportClass}不抽離)` : `(支援不抽離)`;
+        const note = t.isSupport ? (t.supportClass ? `(${t.supportClass}不抽離)` : `(支援不抽離)`) : '';
         commitAssign(activeCell.logId, t.id, t.name, note, false);
     }
   };
@@ -289,8 +295,7 @@ export default function SubstitutionApp() {
             setSwapModal({ isOpen: false });
         }
     } else {
-        const note = `(第${opt.period}節轉上，${opt.className}不入班)`;
-        commitAssign(swapModal.logId, t.id, t.name, note, true);
+        commitAssign(swapModal.logId, t.id, t.name, `(第${opt.period}節轉上，${opt.className}不入班)`, true);
         setSwapModal({ isOpen: false });
     }
   };
@@ -304,6 +309,7 @@ export default function SubstitutionApp() {
     setLogs(prev => (Array.isArray(prev)?prev:[]).filter(l => l.id !== activeCell.logId));
     setActiveCell(null);
   };
+
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
@@ -360,7 +366,6 @@ export default function SubstitutionApp() {
     };
     reader.readAsText(file);
   };
-
   const moveTeacher = (index, direction) => {
     setTeachers(prev => {
       let newTeachers = getSortedTeachers(prev);
@@ -557,13 +562,31 @@ export default function SubstitutionApp() {
 
         <div className="flex-1 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full animate-in fade-in">
            <div className="flex flex-wrap justify-between items-end mb-4 border-b border-gray-100 pb-4">
-              <div className="flex gap-3 items-end">
-                  <div><label className="block text-xs font-bold text-purple-700 mb-1">日期</label><input type="date" value={formDate} onChange={e => setFormDate(e.target.value)} className="border border-purple-200 p-1.5 rounded outline-none focus:border-purple-500 text-sm" /></div>
-                  <div className="flex items-end gap-2 bg-gray-50 p-2 rounded-lg border border-gray-200">
-                    <div><label className="block text-[10px] text-gray-500 mb-0.5">新增缺席老師</label><select value={newAbsentId} onChange={e=>setNewAbsentId(e.target.value)} className="border border-gray-300 p-1 rounded text-sm w-32 outline-none focus:border-purple-400"><option value="">請選擇...</option>{getSortedTeachers(teachers).map(t => <option key={t.id} value={t.id}>{t.title ? `[${t.title}] ` : ''}{t.name}</option>)}</select></div>
-                    <div><label className="block text-[10px] text-gray-500 mb-0.5">原因</label><select value={newAbsentReason} onChange={e=>setNewAbsentReason(e.target.value)} className="border border-gray-300 p-1 rounded text-sm w-20 outline-none focus:border-purple-400">{ABSENT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-                    <button onClick={handleAddAbsent} className="bg-purple-600 text-white px-3 py-1 rounded shadow hover:bg-purple-700 text-sm h-[30px] flex items-center"><Plus size={14} className="mr-1"/> 加入</button>
+              <div className="flex flex-col gap-3">
+                  <div className="flex gap-3 items-end">
+                      <div><label className="block text-xs font-bold text-purple-700 mb-1">日期</label><input type="date" value={formDate} onChange={e => setFormDate(e.target.value)} className="border border-purple-200 p-1.5 rounded outline-none focus:border-purple-500 text-sm" /></div>
+                      <div className="flex items-end gap-2 bg-gray-50 p-2 rounded-lg border border-gray-200">
+                        <div><label className="block text-[10px] text-gray-500 mb-0.5">新增缺席老師</label><select value={newAbsentId} onChange={e=>setNewAbsentId(e.target.value)} className="border border-gray-300 p-1 rounded text-sm w-32 outline-none focus:border-purple-400"><option value="">請選擇...</option>{getSortedTeachers(teachers).map(t => <option key={t.id} value={t.id}>{t.title ? `[${t.title}] ` : ''}{t.name}</option>)}</select></div>
+                        <div><label className="block text-[10px] text-gray-500 mb-0.5">原因</label><select value={newAbsentReason} onChange={e=>setNewAbsentReason(e.target.value)} className="border border-gray-300 p-1 rounded text-sm w-20 outline-none focus:border-purple-400">{ABSENT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+                        <button onClick={handleAddAbsent} className="bg-purple-600 text-white px-3 py-1 rounded shadow hover:bg-purple-700 text-sm h-[30px] flex items-center"><Plus size={14} className="mr-1"/> 加入</button>
+                      </div>
                   </div>
+                  
+                  {/* 顯示今日所有缺席老師並可一鍵刪除 */}
+                  {uniqueAbsents.length > 0 && (
+                    <div className="flex flex-wrap gap-2 items-center bg-red-50 p-2 rounded-lg border border-red-100 text-sm">
+                        <span className="font-bold text-red-800 text-xs">缺席名單:</span>
+                        {uniqueAbsents.map(id => {
+                           const cName = absentCols.find(c => c.id === id)?.name || '未知';
+                           return (
+                             <span key={id} className="bg-white text-red-700 px-2 py-1 rounded shadow-sm border border-red-100 flex items-center gap-1 text-xs font-medium">
+                               {cName}
+                               <Trash2 size={12} className="cursor-pointer hover:text-red-900" onClick={() => handleDeleteAbsentTeacher(id)}/>
+                             </span>
+                           );
+                        })}
+                    </div>
+                  )}
               </div>
               <button onClick={() => downloadImage('arrange-table-capture', `代課安排_${formDate}.png`)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center"><Download size={14} className="mr-1"/> 下載圖片</button>
            </div>
@@ -636,7 +659,7 @@ export default function SubstitutionApp() {
                   <td className="p-3 text-center"><button onClick={()=>deleteTeacher(t?.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button></td>
                 </tr>
               ))}
-              {teachers.length === 0 && <tr><td colSpan="5" className="p-6 text-center text-gray-400">目前沒有教師資料</td></tr>}
+              {(!teachers || teachers.length === 0) && <tr><td colSpan="5" className="p-6 text-center text-gray-400">目前沒有教師資料</td></tr>}
             </tbody>
           </table>
         </div>
@@ -698,12 +721,14 @@ export default function SubstitutionApp() {
           <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 每日代課名單</h2>
           <div className="flex items-center gap-3">
             <input type="date" value={formDate} onChange={e=>setFormDate(e.target.value)} className="border border-purple-200 p-1.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-sm"/>
-            <button onClick={() => downloadImage('report-table-capture', `代課明細_${formDate}.png`)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center"><Download size={14} className="mr-1"/> 下載圖片</button>
           </div>
         </div>
         <div id="report-table-capture" className="bg-white p-2">
             <div className="mb-6 bg-red-50 p-4 rounded-xl border border-red-100">
-              <h3 className="font-bold text-red-800 border-l-4 border-red-500 pl-2 mb-3">今日缺席名單 ({uniqueAbsents.length}人)</h3>
+              <h3 className="font-bold text-red-800 border-l-4 border-red-500 pl-2 mb-3 flex justify-between">
+                <span>今日缺席名單 ({uniqueAbsents.length}人)</span>
+                <button onClick={() => downloadImage('report-table-capture', `代課明細_${formDate}.png`)} className="bg-blue-600 text-white px-3 py-1 rounded shadow text-xs hover:bg-blue-700 flex items-center font-normal"><Download size={12} className="mr-1"/> 下載圖片</button>
+              </h3>
               <div className="flex flex-wrap gap-2">
                 {uniqueAbsents.map(name => {
                    const reason = dailyLogs.find(l => l?.absentName === name)?.reason || '其他';
@@ -734,7 +759,7 @@ export default function SubstitutionApp() {
     );
   };
 
-  if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.6)...</h2></div>);
+  if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.7)...</h2></div>);
 
   return (
     <div className="min-h-screen bg-fuchsia-50 font-sans text-gray-800 pb-10 selection:bg-fuchsia-200">
@@ -743,7 +768,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.6</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.7</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
