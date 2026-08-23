@@ -128,6 +128,30 @@ export default function SubstitutionApp() {
     return () => clearTimeout(timer);
   }, [teachers, logs, isCloudEnabled, isLoading]);
 
+  // --- 手動上傳雲端 (V4.0 新增修復) ---
+  const handleManualCloudUpload = async () => {
+    if (!isCloudEnabled || !dbRef.current) {
+      showAlert("提示", "目前為本機模式或 Firebase 未成功連線，無法上傳雲端。");
+      return;
+    }
+    setSaveStatus('saving');
+    try {
+      const safeTeachers = Array.isArray(teachers) ? teachers : [];
+      const safeLogs = Array.isArray(logs) ? logs : [];
+      await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
+        teachers: safeTeachers,
+        logs: safeLogs,
+        lastUpdated: new Date().toISOString()
+      });
+      setLastSaved(new Date());
+      setSaveStatus('idle');
+      showAlert("成功", "資料已成功手動上傳至雲端！");
+    } catch (e) {
+      setSaveStatus('error');
+      showAlert("錯誤", "上傳至雲端失敗，請檢查網路或雲端設定。");
+    }
+  };
+
   // --- 極強防呆排序 ---
   const getSortedTeachers = (list) => {
     if (!Array.isArray(list)) return [];
@@ -754,7 +778,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V3.9)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.0)...</h2>
       </div>
     );
   }
@@ -765,7 +789,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V3.9</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.0</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
