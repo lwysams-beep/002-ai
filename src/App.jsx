@@ -170,7 +170,6 @@ export default function SubstitutionApp() {
     setNewAbsentId('');
   };
 
-  // V4.7 新增：一鍵刪除整位缺席老師
   const handleDeleteAbsentTeacher = (absentId) => {
     const safeTeachers = Array.isArray(teachers) ? teachers : [];
     const t = safeTeachers.find(x => x.id === absentId);
@@ -309,7 +308,6 @@ export default function SubstitutionApp() {
     setLogs(prev => (Array.isArray(prev)?prev:[]).filter(l => l.id !== activeCell.logId));
     setActiveCell(null);
   };
-
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
@@ -366,6 +364,7 @@ export default function SubstitutionApp() {
     };
     reader.readAsText(file);
   };
+
   const moveTeacher = (index, direction) => {
     setTeachers(prev => {
       let newTeachers = getSortedTeachers(prev);
@@ -572,7 +571,6 @@ export default function SubstitutionApp() {
                       </div>
                   </div>
                   
-                  {/* 顯示今日所有缺席老師並可一鍵刪除 */}
                   {uniqueAbsents.length > 0 && (
                     <div className="flex flex-wrap gap-2 items-center bg-red-50 p-2 rounded-lg border border-red-100 text-sm">
                         <span className="font-bold text-red-800 text-xs">缺席名單:</span>
@@ -588,7 +586,7 @@ export default function SubstitutionApp() {
                     </div>
                   )}
               </div>
-              <button onClick={() => downloadImage('arrange-table-capture', `代課安排_${formDate}.png`)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center"><Download size={14} className="mr-1"/> 下載圖片</button>
+              <button onClick={() => downloadImage('arrange-table-capture', `代課安排_${formDate}.png`)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center h-[34px] self-end"><Download size={14} className="mr-1"/> 下載圖片</button>
            </div>
            <div className="flex-1 overflow-auto rounded-lg border border-gray-200" id="arrange-table-capture">
              <table className="w-full text-sm text-center border-collapse min-w-max bg-white">
@@ -647,7 +645,7 @@ export default function SubstitutionApp() {
           <table className="w-full text-sm">
             <thead className="bg-purple-50 text-purple-900"><tr><th className="p-3 text-center w-16">排序</th><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-left">當日空堂</th><th className="p-3 text-center">刪除</th></tr></thead>
             <tbody className="divide-y divide-purple-50">
-              {getSortedTeachers(teachers).map((t, index) => (
+              {(getSortedTeachers(teachers) || []).map((t, index) => (
                 <tr key={t?.id || index} className="hover:bg-purple-50 bg-white">
                   <td className="p-3 text-center">
                     <div className="flex flex-col gap-1 items-center justify-center">
@@ -759,7 +757,7 @@ export default function SubstitutionApp() {
     );
   };
 
-  if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.7)...</h2></div>);
+  if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.8)...</h2></div>);
 
   return (
     <div className="min-h-screen bg-fuchsia-50 font-sans text-gray-800 pb-10 selection:bg-fuchsia-200">
@@ -768,7 +766,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.7</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.8</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
