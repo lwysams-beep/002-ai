@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, Cloud, CloudOff, Loader2, Save, RefreshCw } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, FileWarning } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
+// --- 常數設定 ---
 const TOTAL_PERIODS = 9;
 const PERIODS = Array.from({ length: TOTAL_PERIODS }, (_, i) => i + 1);
 const CORE_SUBJECTS = ['中文', '英文', '數學', 'CHI', 'ENG', 'MATH', 'CHINESE', 'ENGLISH', 'MATHEMATICS'];
 const ABSENT_REASONS = ['病假', '事假', '進修', '覆診', '遲返', '早退', '交流', '帶隊'];
+
 const STORAGE_KEY_TEACHERS = 'substitution_system_teachers_data_v3';
 const STORAGE_KEY_LOGS = 'substitution_system_logs_data_v3';
 
@@ -37,9 +39,10 @@ export default function SubstitutionApp() {
   const [newTitle, setNewTitle] = useState(''); 
   const [newName, setNewName] = useState(''); 
 
-  const sortImportRef = useRef(null);
+  const teacherImportRef = useRef(null);
   const timetableImportRef = useRef(null);
   const backupImportRef = useRef(null);
+  const sortImportRef = useRef(null);
 
   const [modal, setModal] = useState({ isOpen: false, type: 'info', title: '', message: '', onConfirm: null });
   const [swapModal, setSwapModal] = useState({ isOpen: false, logId: null, subTeacher: null, options: [], selectedOption: null });
@@ -51,7 +54,7 @@ export default function SubstitutionApp() {
       try {
         const fb = await import('./firebaseConfig');
         if (fb && fb.db) dbRef.current = fb.db;
-      } catch (e) { console.log("本機模式"); }
+      } catch (e) { console.log("提示: 本機模式 (無 Firebase 設定)"); }
 
       if (dbRef.current) {
         try {
@@ -136,11 +139,14 @@ export default function SubstitutionApp() {
 
   const handleAddAbsent = () => {
     if (!newAbsentId) return showAlert("提示", "請選擇缺席老師");
-    const t = (Array.isArray(teachers)?teachers:[]).find(x => x.id == newAbsentId);
+    const safeTeachers = Array.isArray(teachers) ? teachers : [];
+    const safeLogs = Array.isArray(logs) ? logs : [];
+    const t = safeTeachers.find(x => x.id == newAbsentId);
     if (!t) return;
+    
     const dayOfWeek = new Date(formDate).getDay();
     const busy = t.masterSchedule?.[dayOfWeek] || [];
-    const existing = (Array.isArray(logs)?logs:[]).filter(l => l?.date === formDate && l?.absentId == newAbsentId).map(l => l.period);
+    const existing = safeLogs.filter(l => l?.date === formDate && l?.absentId == newAbsentId).map(l => l.period);
     
     const newLogs = [];
     busy.forEach(p => {
@@ -158,6 +164,7 @@ export default function SubstitutionApp() {
         });
       }
     });
+    
     if (newLogs.length > 0) setLogs(prev => [...(Array.isArray(prev)?prev:[]), ...newLogs]);
     else showAlert("提示", "該老師今日無排定課堂，或已全數加入缺席名單。");
     setNewAbsentId('');
@@ -165,17 +172,19 @@ export default function SubstitutionApp() {
 
   const getCategorizedTeachers = () => {
     if (!activeCell) return { recommended: [], subbedOne: [], notArranged: [] };
+    const safeTeachers = Array.isArray(teachers) ? teachers : [];
+    const safeLogs = Array.isArray(logs) ? logs : [];
     const p = activeCell.period;
     const dayOfWeek = new Date(formDate).getDay();
     const targetKey = `${dayOfWeek}-${p}`; 
     const normClass = (activeCell.className || '').trim().toUpperCase();
-    const dailyLogs = (Array.isArray(logs)?logs:[]).filter(l => l?.date === formDate);
+    const dailyLogs = safeLogs.filter(l => l?.date === formDate);
     const absentTeacherIds = [...new Set(dailyLogs.map(l => l.absentId))].filter(Boolean); 
 
-    const allMapped = (Array.isArray(teachers)?teachers:[]).map(t => {
+    const allMapped = safeTeachers.map(t => {
       const subbedLogs = dailyLogs.filter(log => log?.subId == t.id);
       const extraSubCount = subbedLogs.filter(l => !l.isSwap).length; 
-      const baseFree = t.freePeriods || [];
+      const baseFree = Array.isArray(t.freePeriods) ? t.freePeriods : [];
       const actualFreeCount = baseFree.length - extraSubCount;
 
       const title = (t.title || '').toUpperCase();
@@ -200,7 +209,7 @@ export default function SubstitutionApp() {
       const currentStatus = isFreeAtP ? '空堂' : '入班';
 
       return {
-          ...t, extraSubCount, actualFreeCount, isSpecialRole, rolePriority, 
+          ...t, freePeriods: baseFree, extraSubCount, actualFreeCount, isSpecialRole, rolePriority, 
           isPT, isTA, isSupport, supportClass, currentStatus, canSubAtP,
           isAbsent: absentTeacherIds.includes(t.id)
       };
@@ -226,7 +235,12 @@ export default function SubstitutionApp() {
       if (a.actualFreeCount !== b.actualFreeCount) return b.actualFreeCount - a.actualFreeCount;
       return (a.name || '').localeCompare(b.name || '', "zh-HK");
     };
-    return { recommended: recommended.sort(sorter), subbedOne: subbedOne.sort(sorter), notArranged: notArranged.sort(sorter) };
+
+    return {
+      recommended: recommended.sort(sorter),
+      subbedOne: subbedOne.sort(sorter),
+      notArranged: notArranged.sort(sorter)
+    };
   };
 
   const commitAssign = (logId, subId, subName, note, isSwap) => {
@@ -236,9 +250,10 @@ export default function SubstitutionApp() {
 
   const handleAssignSub = (t) => {
     if (!t) return;
+    const p = activeCell.period;
     const dayOfWeek = new Date(formDate).getDay();
 
-    if (t.isPT || t.isTA) {
+    if (t.isSpecialRole && (t.isPT || t.isTA || t.rolePriority <= 4)) {
         if (t.currentStatus === '入班') {
             const note = `(${t.supportClass || '未知'}不入班)`;
             commitAssign(activeCell.logId, t.id, t.name, note, true);
@@ -254,7 +269,8 @@ export default function SubstitutionApp() {
             setSwapModal({ isOpen: true, logId: activeCell.logId, subTeacher: t, options, selectedOption: options[0] });
         }
     } else {
-        const note = t.isSupport ? (t.supportClass ? `(${t.supportClass}不抽離)` : `(支援不抽離)`) : '';
+        let note = '';
+        if (t.isSupport) note = t.supportClass ? `(${t.supportClass}不抽離)` : `(支援不抽離)`;
         commitAssign(activeCell.logId, t.id, t.name, note, false);
     }
   };
@@ -273,7 +289,8 @@ export default function SubstitutionApp() {
             setSwapModal({ isOpen: false });
         }
     } else {
-        commitAssign(swapModal.logId, t.id, t.name, `(第${opt.period}節轉上，${opt.className}不入班)`, true);
+        const note = `(第${opt.period}節轉上，${opt.className}不入班)`;
+        commitAssign(swapModal.logId, t.id, t.name, note, true);
         setSwapModal({ isOpen: false });
     }
   };
@@ -287,7 +304,6 @@ export default function SubstitutionApp() {
     setLogs(prev => (Array.isArray(prev)?prev:[]).filter(l => l.id !== activeCell.logId));
     setActiveCell(null);
   };
-
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
@@ -407,15 +423,6 @@ export default function SubstitutionApp() {
     reader.readAsText(file);
   };
 
-  const handleManualCloudUpload = async () => {
-    if (!isCloudEnabled || !dbRef.current) return showAlert("提示", "目前為本機模式，無法上傳雲端。");
-    setSaveStatus('saving');
-    try {
-      await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), { teachers, logs, lastUpdated: new Date().toISOString() });
-      setLastSaved(new Date()); setSaveStatus('idle'); showAlert("成功", "資料已成功上傳！");
-    } catch (e) { setSaveStatus('error'); showAlert("錯誤", "上傳失敗。"); }
-  };
-
   const exportStatsToCSV = () => {
     const monthLogs = (Array.isArray(logs)?logs:[]).filter(l => (l?.date || '').startsWith(statsMonth));
     let csv = `\ufeff職銜,姓名,${statsMonth} 缺課,${statsMonth} 代課,淨值\n`;
@@ -503,17 +510,18 @@ export default function SubstitutionApp() {
                 <div className="text-xs text-gray-500 mt-0.5">額外已代: <span className="font-bold text-purple-600">{t.extraSubCount}</span> 節 | 剩餘空堂: {t.actualFreeCount}</div>
                 {t.rolePriority === 1 && <div className="text-[10px] text-indigo-600 font-bold mt-1 bg-indigo-50 inline-block px-1 rounded border border-indigo-200 mr-1">外聘代課</div>}
                 {t.rolePriority === 2 && <div className="text-[10px] text-teal-600 font-bold mt-1 bg-teal-50 inline-block px-1 rounded border border-teal-200 mr-1">實習</div>}
-                {(t.isPT || t.isTA) && ( <div className={`text-[10px] font-bold mt-1 inline-block px-1 rounded border mr-1 ${t.currentStatus === '空堂' ? 'text-green-600 bg-green-50 border-green-200' : 'text-orange-600 bg-orange-50 border-orange-200'}`}>{t.isPT ? 'PT' : 'TA'} ({t.currentStatus})</div> )}
+                {t.isSpecialRole && t.rolePriority > 2 && ( <div className={`text-[10px] font-bold mt-1 inline-block px-1 rounded border mr-1 ${t.currentStatus === '空堂' ? 'text-green-600 bg-green-50 border-green-200' : 'text-orange-600 bg-orange-50 border-orange-200'}`}>{t.isPT ? 'PT' : 'TA'} ({t.currentStatus})</div> )}
                 {t.isSupport && t.rolePriority >= 5 && <div className="text-[10px] text-orange-600 mt-1 bg-orange-50 inline-block px-1 rounded mr-1">抽離 ({t.supportClass})</div>}
               </div>
               {title !== "不安排名單" && <button type="button" onClick={() => handleAssignSub(t)} className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-fuchsia-500 text-white rounded text-xs shadow">指派</button>}
-              {title === "不安排名單" && <div className="text-xs text-red-400">{t.isAbsent ? '缺席' : '空堂≤2'}</div>}
+              {title === "不安排名單" && <div className="text-xs text-red-400 font-bold">{t.isAbsent ? '缺席' : '空堂≤2'}</div>}
            </div>
          ))}
          {list.length === 0 && <div className="text-center text-gray-400 text-sm py-2 border border-dashed rounded-lg">{emptyMsg}</div>}
       </div>
     </div>
   );
+
   const renderArrangeView = () => {
     const safeLogs = Array.isArray(logs) ? logs : [];
     const dailyLogs = safeLogs.filter(l => l?.date === formDate);
@@ -527,105 +535,44 @@ export default function SubstitutionApp() {
 
     return (
       <div className="flex flex-col md:flex-row gap-4 h-[75vh]">
-        {/* 左側：推薦名單 */}
-        <div className="w-full md:w-1/3 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full overflow-hidden animate-in fade-in slide-in-from-left-4">
-          <h3 className="font-bold text-lg text-purple-900 mb-3 border-b border-purple-100 pb-2 flex items-center">
-            <Star className="mr-2 text-fuchsia-500" size={18}/> 安排操作
-          </h3>
+        <div className="w-full md:w-1/3 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full overflow-hidden animate-in fade-in">
+          <h3 className="font-bold text-lg text-purple-900 mb-3 border-b border-purple-100 pb-2 flex items-center"><Star className="mr-2 text-fuchsia-500" size={18}/> 安排操作</h3>
           {!activeCell ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm p-4 text-center border-2 border-dashed border-gray-100 rounded-lg">
-               <Search size={40} className="mb-2 text-gray-300"/>
-               請在右方表格點選<br/>「需要代課」的格子來安排
-            </div>
+            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm p-4 text-center border-2 border-dashed border-gray-100 rounded-lg"><Search size={40} className="mb-2 text-gray-300"/>請在右方表格點選<br/>「需要代課」的格子來安排</div>
           ) : (
             <div className="flex flex-col h-full overflow-hidden">
               <div className="bg-purple-50 p-3 rounded-lg mb-4 text-sm shadow-sm border border-purple-100 shrink-0">
-                <p><strong>缺席:</strong> {activeCell.absentName} ({activeCell.reason})</p>
-                <p><strong>節次:</strong> 第 {activeCell.period} 節</p>
-                <div className="flex items-center mt-2">
-                  <strong className="mr-2">班別:</strong> 
-                  <input 
-                    type="text" 
-                    value={activeCell.className || ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setActiveCell(prev => ({...prev, className: val}));
-                      setLogs(prev => (Array.isArray(prev)?prev:[]).map(l => l.id === activeCell.logId ? {...l, className: val} : l));
-                    }}
-                    className="border p-1 rounded w-20 text-xs outline-none focus:border-purple-400 bg-white"
-                  />
-                </div>
-                {activeCell.subId && activeCell.subId !== 'CANCELLED' && (
-                  <div className="mt-3 p-2 bg-green-100 text-green-800 rounded flex justify-between items-center border border-green-200">
-                    <div>已指派: <strong>{activeCell.subName}</strong><br/><span className="text-[10px] text-green-600">{activeCell.note}</span></div>
-                    <button type="button" onClick={handleRemoveSub} className="text-xs bg-white text-red-500 px-2 py-1 rounded shadow-sm hover:bg-red-50 border border-red-100 shrink-0">移除代課</button>
-                  </div>
-                )}
-                {activeCell.subId === 'CANCELLED' && (
-                  <div className="mt-3 p-2 bg-gray-200 text-gray-600 rounded flex justify-between items-center border border-gray-300">
-                    <span>狀態: <strong>自動取消</strong></span>
-                    <button type="button" onClick={handleRemoveSub} className="text-xs bg-white text-purple-600 px-2 py-1 rounded shadow-sm hover:bg-purple-50 border border-purple-200">還原代課</button>
-                  </div>
-                )}
-                <div className="mt-3 pt-3 border-t border-purple-200 text-right">
-                  <button type="button" onClick={handleDeleteLog} className="text-xs text-red-500 hover:underline flex items-center justify-end w-full"><Trash2 size={12} className="mr-1"/> 刪除此節缺課紀錄</button>
-                </div>
+                <p><strong>缺席:</strong> {activeCell.absentName} ({activeCell.reason})</p><p><strong>節次:</strong> 第 {activeCell.period} 節</p>
+                <div className="flex items-center mt-2"><strong className="mr-2">班別:</strong><input type="text" value={activeCell.className || ''} onChange={(e) => { const val = e.target.value; setActiveCell(prev => ({...prev, className: val})); setLogs(prev => (Array.isArray(prev)?prev:[]).map(l => l.id === activeCell.logId ? {...l, className: val} : l)); }} className="border p-1 rounded w-20 text-xs outline-none focus:border-purple-400 bg-white" /></div>
+                {activeCell.subId && activeCell.subId !== 'CANCELLED' && ( <div className="mt-3 p-2 bg-green-100 text-green-800 rounded flex justify-between items-center border border-green-200"><div>已指派: <strong>{activeCell.subName}</strong><br/><span className="text-[10px] text-green-600 font-bold">{activeCell.note}</span></div><button onClick={handleRemoveSub} className="text-xs bg-white text-red-500 px-2 py-1 rounded shadow-sm hover:bg-red-50 border border-red-100 shrink-0">移除代課</button></div> )}
+                {activeCell.subId === 'CANCELLED' && ( <div className="mt-3 p-2 bg-gray-200 text-gray-600 rounded flex justify-between items-center border border-gray-300"><span>狀態: <strong>自動取消</strong></span><button onClick={handleRemoveSub} className="text-xs bg-white text-purple-600 px-2 py-1 rounded shadow-sm hover:bg-purple-50 border border-purple-200">還原代課</button></div> )}
+                <div className="mt-3 pt-3 border-t border-purple-200 text-right"><button onClick={handleDeleteLog} className="text-xs text-red-500 hover:underline flex items-center justify-end w-full"><Trash2 size={12} className="mr-1"/> 刪除此節缺課紀錄</button></div>
               </div>
-              
               <div className="flex-1 overflow-y-auto pr-1">
-                 {activeCell.subId !== 'CANCELLED' ? (
-                   <>
-                     {renderTeacherList("推薦代課名單", recommended, "無優先推薦老師")}
-                     {renderTeacherList("額外1節名單 (已代1節)", subbedOne, "無老師在此名單")}
-                     {renderTeacherList("不安排名單", notArranged, "無老師在此名單")}
-                   </>
-                 ) : (
-                   <div className="text-center text-gray-400 text-sm py-8 border border-dashed rounded-lg mt-4">課堂已取消</div>
-                 )}
+                 {activeCell.subId !== 'CANCELLED' ? ( <>{renderTeacherList("推薦代課名單", recommended, "無優先推薦老師")}{renderTeacherList("額外1節名單 (已代1節)", subbedOne, "無老師在此名單")}{renderTeacherList("不安排名單", notArranged, "無老師在此名單")}</> ) : ( <div className="text-center text-gray-400 text-sm py-8 border border-dashed rounded-lg mt-4">課堂已取消</div> )}
               </div>
             </div>
           )}
         </div>
 
-        {/* 右側：並列表格 */}
-        <div className="flex-1 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full animate-in fade-in slide-in-from-right-4">
+        <div className="flex-1 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full animate-in fade-in">
            <div className="flex flex-wrap justify-between items-end mb-4 border-b border-gray-100 pb-4">
               <div className="flex gap-3 items-end">
-                  <div>
-                    <label className="block text-xs font-bold text-purple-700 mb-1">日期</label>
-                    <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)} className="border border-purple-200 p-1.5 rounded outline-none focus:border-purple-500 text-sm" />
-                  </div>
+                  <div><label className="block text-xs font-bold text-purple-700 mb-1">日期</label><input type="date" value={formDate} onChange={e => setFormDate(e.target.value)} className="border border-purple-200 p-1.5 rounded outline-none focus:border-purple-500 text-sm" /></div>
                   <div className="flex items-end gap-2 bg-gray-50 p-2 rounded-lg border border-gray-200">
-                    <div>
-                      <label className="block text-[10px] text-gray-500 mb-0.5">新增缺席老師</label>
-                      <select value={newAbsentId} onChange={e=>setNewAbsentId(e.target.value)} className="border border-gray-300 p-1 rounded text-sm w-32 outline-none focus:border-purple-400">
-                        <option value="">請選擇...</option>
-                        {getSortedTeachers(teachers).map(t => <option key={t.id} value={t.id}>{t.title ? `[${t.title}] ` : ''}{t.name}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-gray-500 mb-0.5">原因</label>
-                      <select value={newAbsentReason} onChange={e=>setNewAbsentReason(e.target.value)} className="border border-gray-300 p-1 rounded text-sm w-20 outline-none focus:border-purple-400">
-                        {ABSENT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
-                      </select>
-                    </div>
-                    <button type="button" onClick={handleAddAbsent} className="bg-purple-600 text-white px-3 py-1 rounded shadow hover:bg-purple-700 text-sm h-[30px] flex items-center"><Plus size={14} className="mr-1"/> 加入</button>
+                    <div><label className="block text-[10px] text-gray-500 mb-0.5">新增缺席老師</label><select value={newAbsentId} onChange={e=>setNewAbsentId(e.target.value)} className="border border-gray-300 p-1 rounded text-sm w-32 outline-none focus:border-purple-400"><option value="">請選擇...</option>{getSortedTeachers(teachers).map(t => <option key={t.id} value={t.id}>{t.title ? `[${t.title}] ` : ''}{t.name}</option>)}</select></div>
+                    <div><label className="block text-[10px] text-gray-500 mb-0.5">原因</label><select value={newAbsentReason} onChange={e=>setNewAbsentReason(e.target.value)} className="border border-gray-300 p-1 rounded text-sm w-20 outline-none focus:border-purple-400">{ABSENT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+                    <button onClick={handleAddAbsent} className="bg-purple-600 text-white px-3 py-1 rounded shadow hover:bg-purple-700 text-sm h-[30px] flex items-center"><Plus size={14} className="mr-1"/> 加入</button>
                   </div>
               </div>
-              <button type="button" onClick={() => downloadImage('arrange-table-capture', `代課安排_${formDate}.png`)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center"><ImageIcon size={14} className="mr-1"/> 下載圖片</button>
+              <button onClick={() => downloadImage('arrange-table-capture', `代課安排_${formDate}.png`)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center"><Download size={14} className="mr-1"/> 下載圖片</button>
            </div>
-
            <div className="flex-1 overflow-auto rounded-lg border border-gray-200" id="arrange-table-capture">
              <table className="w-full text-sm text-center border-collapse min-w-max bg-white">
                 <thead className="bg-purple-50 sticky top-0 z-20 shadow-sm">
                    <tr>
                      <th className="p-2 border-b border-r border-gray-200 min-w-[60px] bg-purple-100 sticky left-0 z-30">節次</th>
-                     {absentCols.map(c => (
-                       <th key={c.id} className="p-2 border-b border-gray-200 min-w-[140px] bg-purple-50">
-                         <div className="font-bold text-purple-900 text-base">{c.name}</div>
-                         <div className="text-[10px] text-red-500 bg-red-50 rounded px-1 inline-block mt-0.5 border border-red-100">{c.reason}</div>
-                       </th>
-                     ))}
+                     {absentCols.map(c => ( <th key={c.id} className="p-2 border-b border-gray-200 min-w-[140px] bg-purple-50"><div className="font-bold text-purple-900 text-base">{c.name}</div><div className="text-[10px] text-red-500 bg-red-50 rounded px-1 inline-block mt-0.5 border border-red-100">{c.reason}</div></th> ))}
                      {absentCols.length === 0 && <th className="p-2 border-b text-gray-400 font-normal">請先於上方新增缺席老師</th>}
                    </tr>
                 </thead>
@@ -636,31 +583,11 @@ export default function SubstitutionApp() {
                        {absentCols.map(c => {
                           const log = dailyLogs.find(l => l.absentId === c.id && l.period === p);
                           const isActive = activeCell?.logId === log?.id;
-                          
                           if (!log) return <td key={c.id} className="p-2 border-b border-gray-200 bg-gray-50 text-gray-300">-</td>;
                           const isCancelled = log.subId === 'CANCELLED';
-
                           return (
-                            <td 
-                              key={c.id} 
-                              onClick={() => setActiveCell({...log, logId: log.id})}
-                              className={`p-2 border-b cursor-pointer transition-all ${
-                                isActive ? 'bg-purple-100 ring-2 ring-inset ring-purple-500' :
-                                isCancelled ? 'bg-gray-100 border-x border-gray-200' :
-                                !log.subId ? 'bg-red-50 hover:bg-red-100 border-x border-red-100' : 
-                                'bg-green-50 hover:bg-green-100 border-x border-green-100'
-                              }`}
-                            >
-                              {isCancelled ? (
-                                <div className="text-gray-500 font-bold text-sm">S班取消</div>
-                              ) : !log.subId ? (
-                                <div className="text-red-500 font-bold text-sm drop-shadow-sm">需要代課</div>
-                              ) : (
-                                <div>
-                                    <div className="text-green-700 font-bold text-base">{log.subName}</div>
-                                    {log.note && <div className="text-[10px] text-orange-600 mt-0.5 leading-tight">{log.note}</div>}
-                                </div>
-                              )}
+                            <td key={c.id} onClick={() => setActiveCell({...log, logId: log.id})} className={`p-2 border-b cursor-pointer transition-all ${isActive ? 'bg-purple-100 ring-2 ring-inset ring-purple-500' : isCancelled ? 'bg-gray-100 border-x border-gray-200' : !log.subId ? 'bg-red-50 hover:bg-red-100 border-x border-red-100' : 'bg-green-50 hover:bg-green-100 border-x border-green-100'}`}>
+                              {isCancelled ? ( <div className="text-gray-500 font-bold text-sm">S班取消</div> ) : !log.subId ? ( <div className="text-red-500 font-bold text-sm drop-shadow-sm">需要代課</div> ) : ( <div><div className="text-green-700 font-bold text-base">{log.subName}</div>{log.note && <div className="text-[10px] text-orange-600 font-bold mt-0.5 leading-tight">{log.note}</div>}</div> )}
                               <div className="text-[11px] text-gray-500 mt-1">{log.className || '(未輸入班別)'}</div>
                             </td>
                           );
@@ -677,18 +604,15 @@ export default function SubstitutionApp() {
   };
 
   const renderTeachersView = () => {
-    const sortedTeachers = getSortedTeachers(teachers);
     return (
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4 animate-in fade-in zoom-in duration-300">
         <div className="flex flex-wrap justify-between items-center gap-2">
           <h2 className="text-xl font-bold text-purple-800 flex items-center"><UserCheck className="mr-2"/> 教師設定</h2>
           <div className="flex gap-2">
-            <button type="button" onClick={() => sortImportRef.current.click()} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm shadow hover:bg-green-700 flex items-center"><Upload size={14} className="mr-1"/> 匯入排序</button>
-            <input type="file" ref={sortImportRef} onChange={handleSortImport} className="hidden" />
-            <button type="button" onClick={downloadTimetableTemplate} className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm border border-purple-200 hover:bg-purple-100"><Download size={14} className="inline mr-1"/>範本</button>
-            <button type="button" onClick={() => timetableImportRef.current.click()} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm shadow hover:bg-purple-700"><FileText size={14} className="inline mr-1"/>匯入課表</button>
-            <button type="button" onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center"><Upload size={14} className="mr-1"/> 手動上傳雲端</button>
-            <input type="file" ref={timetableImportRef} onChange={e => handleCSVImport(e, 'timetable')} className="hidden" />
+            <button onClick={() => sortImportRef.current.click()} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm shadow hover:bg-green-700 flex items-center"><Upload size={14} className="mr-1"/> 匯入排序</button><input type="file" ref={sortImportRef} onChange={handleSortImport} className="hidden" />
+            <button onClick={downloadTimetableTemplate} className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-sm border border-purple-200 hover:bg-purple-100"><Download size={14} className="inline mr-1"/>範本</button>
+            <button onClick={() => timetableImportRef.current.click()} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm shadow hover:bg-purple-700"><FileText size={14} className="inline mr-1"/>匯入課表</button><input type="file" ref={timetableImportRef} onChange={e => handleCSVImport(e, 'timetable')} className="hidden" />
+            <button onClick={handleManualCloudUpload} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm shadow hover:bg-blue-700 flex items-center"><Upload size={14} className="mr-1"/> 手動上傳雲端</button>
           </div>
         </div>
         <form onSubmit={addTeacher} className="flex gap-2">
@@ -698,37 +622,21 @@ export default function SubstitutionApp() {
         </form>
         <div className="overflow-x-auto rounded-xl border border-purple-100">
           <table className="w-full text-sm">
-            <thead className="bg-purple-50 text-purple-900">
-              <tr>
-                <th className="p-3 text-center w-16">排序</th>
-                <th className="p-3 text-left w-20">職銜</th>
-                <th className="p-3 text-left">姓名</th>
-                <th className="p-3 text-left">當日空堂</th>
-                <th className="p-3 text-center">刪除</th>
-              </tr>
-            </thead>
+            <thead className="bg-purple-50 text-purple-900"><tr><th className="p-3 text-center w-16">排序</th><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-left">當日空堂</th><th className="p-3 text-center">刪除</th></tr></thead>
             <tbody className="divide-y divide-purple-50">
-              {sortedTeachers.map((t, index) => (
+              {getSortedTeachers(teachers).map((t, index) => (
                 <tr key={t?.id || index} className="hover:bg-purple-50 bg-white">
                   <td className="p-3 text-center">
                     <div className="flex flex-col gap-1 items-center justify-center">
-                      <button type="button" onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button>
-                      <button type="button" onClick={() => moveTeacher(index, 'down')} disabled={index===(sortedTeachers.length-1)} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
+                      <button onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button><button onClick={() => moveTeacher(index, 'down')} disabled={index===(teachers.length-1)} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
                     </div>
                   </td>
-                  <td className="p-3 text-gray-500 font-medium text-xs">{t?.title || '-'}</td>
-                  <td className="p-3 font-medium">{t?.name || '未知'}</td>
-                  <td className="p-3 flex flex-wrap gap-1">
-                    {PERIODS.map(p => (
-                      <button type="button" key={p} onClick={()=>toggleFreePeriod(t?.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t?.freePeriods || []).includes(p) ? 'bg-green-100 text-green-700 border border-green-300 font-bold' : 'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button>
-                    ))}
-                  </td>
-                  <td className="p-3 text-center">
-                    <button type="button" onClick={()=>deleteTeacher(t?.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button>
-                  </td>
+                  <td className="p-3 text-gray-500 font-medium text-xs">{t?.title || '-'}</td><td className="p-3 font-medium">{t?.name || '未知'}</td>
+                  <td className="p-3 flex flex-wrap gap-1">{PERIODS.map(p => ( <button key={p} onClick={()=>toggleFreePeriod(t?.id, p)} className={`w-7 h-7 rounded-full text-xs transition-all ${(t?.freePeriods || []).includes(p) ? 'bg-green-100 text-green-700 border border-green-300 font-bold' : 'bg-gray-50 text-gray-300 border border-gray-100'}`}>{p}</button> ))}</td>
+                  <td className="p-3 text-center"><button onClick={()=>deleteTeacher(t?.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={16}/></button></td>
                 </tr>
               ))}
-              {sortedTeachers.length === 0 && <tr><td colSpan="5" className="p-6 text-center text-gray-400">目前沒有任何教師資料，請新增或匯入資料</td></tr>}
+              {teachers.length === 0 && <tr><td colSpan="5" className="p-6 text-center text-gray-400">目前沒有教師資料</td></tr>}
             </tbody>
           </table>
         </div>
@@ -737,14 +645,12 @@ export default function SubstitutionApp() {
   };
 
   const renderStatsView = () => {
-    const safeLogs = Array.isArray(logs) ? logs : [];
-    const monthLogs = safeLogs.filter(l => (l?.date || '').startsWith(statsMonth));
+    const monthLogs = (Array.isArray(logs)?logs:[]).filter(l => (l?.date || '').startsWith(statsMonth));
     const statsData = getSortedTeachers(teachers).map(t => {
       const monthAbs = monthLogs.filter(l => l?.absentId === t?.id).length;
       const monthSubs = monthLogs.filter(l => l?.subId === t?.id && l?.subId !== 'CANCELLED' && !l?.isSwap).length;
       return { ...t, monthAbs, monthSubs };
     });
-
     return (
       <div className="space-y-6 animate-in fade-in zoom-in duration-300">
         <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100">
@@ -752,10 +658,9 @@ export default function SubstitutionApp() {
             <h2 className="text-xl font-bold text-purple-800 flex items-center"><BarChart3 className="mr-2"/> 每月缺代課統計</h2>
             <div className="flex items-center gap-3">
               <div className="flex items-center bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
-                 <label className="text-sm text-gray-600 mr-2 font-bold">選擇月份:</label>
-                 <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)} className="border-none bg-transparent outline-none text-purple-700 font-bold" />
+                 <label className="text-sm text-gray-600 mr-2 font-bold">選擇月份:</label><input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)} className="border-none bg-transparent outline-none text-purple-700 font-bold" />
               </div>
-              <button type="button" onClick={exportStatsToCSV} className="px-3 py-1.5 bg-fuchsia-600 text-white rounded-lg text-sm shadow hover:bg-fuchsia-700 flex items-center"><Download size={14} className="mr-1"/>匯出 CSV</button>
+              <button onClick={exportStatsToCSV} className="px-3 py-1.5 bg-fuchsia-600 text-white rounded-lg text-sm shadow hover:bg-fuchsia-700 flex items-center"><Download size={14} className="mr-1"/>匯出 CSV</button>
             </div>
           </div>
           <div className="overflow-hidden rounded-xl border border-purple-100">
@@ -763,10 +668,8 @@ export default function SubstitutionApp() {
               <thead className="bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white"><tr><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-center">{statsMonth} 缺課</th><th className="p-3 text-center">{statsMonth} 代課</th><th className="p-3 text-center">淨值</th></tr></thead>
               <tbody className="divide-y divide-purple-50">{statsData.map(t => (
                 <tr key={t?.id || Math.random()} className="hover:bg-purple-50">
-                <td className="p-3 text-gray-500 text-xs">{t?.title || '-'}</td>
-                <td className="p-3 font-medium">{t?.name || '未知'}</td>
-                <td className="p-3 text-center text-red-500 font-bold">{t?.monthAbs || 0}</td>
-                <td className="p-3 text-center text-purple-600 font-bold">{t?.monthSubs || 0}</td>
+                <td className="p-3 text-gray-500 text-xs">{t?.title || '-'}</td><td className="p-3 font-medium">{t?.name || '未知'}</td>
+                <td className="p-3 text-center text-red-500 font-bold">{t?.monthAbs || 0}</td><td className="p-3 text-center text-purple-600 font-bold">{t?.monthSubs || 0}</td>
                 <td className={`p-3 text-center font-bold ${(t?.monthSubs || 0) - (t?.monthAbs || 0) > 0 ? 'text-green-600' : (t?.monthSubs || 0) - (t?.monthAbs || 0) < 0 ? 'text-orange-500' : 'text-gray-400'}`}>{(t?.monthSubs || 0) - (t?.monthAbs || 0) > 0 ? '+' : ''}{(t?.monthSubs || 0) - (t?.monthAbs || 0)}</td>
                 </tr>
               ))}</tbody>
@@ -776,9 +679,8 @@ export default function SubstitutionApp() {
         <div className="bg-gradient-to-r from-gray-50 to-purple-50 p-6 rounded-2xl shadow-inner border border-purple-100">
           <h3 className="font-bold text-gray-700 mb-2 flex items-center"><Save className="mr-2" size={18}/> 備份與還原</h3>
           <div className="flex gap-3 mt-3">
-            <button type="button" onClick={downloadBackup} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm shadow hover:bg-blue-700 transition-colors flex items-center"><Download size={14} className="mr-2"/>下載備份</button>
-            <button type="button" onClick={()=>backupImportRef.current.click()} className="bg-white text-gray-700 border border-gray-300 px-4 py-2 rounded-lg text-sm shadow-sm hover:bg-gray-50 transition-colors flex items-center"><RefreshCw size={14} className="mr-2"/>還原備份</button>
-            <input type="file" ref={backupImportRef} onChange={restoreBackup} className="hidden" />
+            <button onClick={downloadBackup} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm shadow hover:bg-blue-700 transition-colors flex items-center"><Download size={14} className="mr-2"/>下載備份</button>
+            <button onClick={()=>backupImportRef.current.click()} className="bg-white text-gray-700 border border-gray-300 px-4 py-2 rounded-lg text-sm shadow-sm hover:bg-gray-50 transition-colors flex items-center"><RefreshCw size={14} className="mr-2"/>還原備份</button><input type="file" ref={backupImportRef} onChange={restoreBackup} className="hidden" />
           </div>
           {lastSaved && <p className="text-xs text-green-600 text-right mt-2 flex justify-end items-center"><CheckCircle size={10} className="mr-1"/>上次雲端同步: {lastSaved.toLocaleTimeString()}</p>}
         </div>
@@ -787,8 +689,7 @@ export default function SubstitutionApp() {
   };
 
   const renderReportView = () => {
-    const safeLogs = Array.isArray(logs) ? logs : [];
-    const dailyLogs = safeLogs.filter(l => l?.date === formDate).sort((a,b) => (a?.period||0) - (b?.period||0));
+    const dailyLogs = (Array.isArray(logs)?logs:[]).filter(l => l?.date === formDate).sort((a,b) => (a?.period||0) - (b?.period||0));
     const uniqueAbsents = [...new Set(dailyLogs.map(l => l?.absentName))].filter(Boolean);
 
     return (
@@ -797,10 +698,9 @@ export default function SubstitutionApp() {
           <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 每日代課名單</h2>
           <div className="flex items-center gap-3">
             <input type="date" value={formDate} onChange={e=>setFormDate(e.target.value)} className="border border-purple-200 p-1.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 text-sm"/>
-            <button type="button" onClick={() => downloadImage('report-table-capture', `代課明細_${formDate}.png`)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center"><ImageIcon size={14} className="mr-1"/> 下載圖片</button>
+            <button onClick={() => downloadImage('report-table-capture', `代課明細_${formDate}.png`)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center"><Download size={14} className="mr-1"/> 下載圖片</button>
           </div>
         </div>
-
         <div id="report-table-capture" className="bg-white p-2">
             <div className="mb-6 bg-red-50 p-4 rounded-xl border border-red-100">
               <h3 className="font-bold text-red-800 border-l-4 border-red-500 pl-2 mb-3">今日缺席名單 ({uniqueAbsents.length}人)</h3>
@@ -812,28 +712,16 @@ export default function SubstitutionApp() {
                 {uniqueAbsents.length === 0 && <span className="text-gray-400 text-sm">本日無缺席紀錄</span>}
               </div>
             </div>
-
             <div>
               <h3 className="font-bold text-purple-800 border-l-4 border-purple-500 pl-2 mb-3">代課安排明細</h3>
               <div className="overflow-hidden rounded-xl border border-purple-100 shadow-sm">
                 <table className="min-w-full bg-white text-sm">
-                  <thead className="bg-gradient-to-r from-purple-50 to-pink-50 text-purple-900">
-                    <tr>
-                      <th className="p-3 text-center">節次</th>
-                      <th className="p-3 text-center">班別</th>
-                      <th className="p-3 text-center text-red-600">缺席老師</th>
-                      <th className="p-3 text-center text-green-700">代課老師</th>
-                      <th className="p-3 text-left">備註</th>
-                    </tr>
-                  </thead>
+                  <thead className="bg-gradient-to-r from-purple-50 to-pink-50 text-purple-900"><tr><th className="p-3 text-center">節次</th><th className="p-3 text-center">班別</th><th className="p-3 text-center text-red-600">缺席老師</th><th className="p-3 text-center text-green-700">代課老師</th><th className="p-3 text-left">備註</th></tr></thead>
                   <tbody className="divide-y divide-purple-50">
                     {dailyLogs.map(l => (
                       <tr key={l?.id || Math.random()} className="hover:bg-purple-50 transition-colors text-center">
-                        <td className="p-3 font-bold text-purple-700">{l?.period || '-'}</td>
-                        <td className="p-3">{l?.className || '-'}</td>
-                        <td className="p-3 text-red-500 font-medium">{l?.absentName || '未知'}</td>
-                        <td className="p-3 font-bold text-green-600">{l?.subId === 'CANCELLED' ? <span className="text-gray-500">S班取消</span> : (l?.subName || '未安排')}</td>
-                        <td className="p-3 text-xs text-orange-600 font-bold text-left">{l?.note || ''}</td>
+                        <td className="p-3 font-bold text-purple-700">{l?.period || '-'}</td><td className="p-3">{l?.className || '-'}</td><td className="p-3 text-red-500 font-medium">{l?.absentName || '未知'}</td>
+                        <td className="p-3 font-bold text-green-600">{l?.subId === 'CANCELLED' ? <span className="text-gray-500">S班取消</span> : (l?.subName || '未安排')}</td><td className="p-3 text-xs text-orange-600 font-bold text-left">{l?.note || ''}</td>
                       </tr>
                     ))}
                     {dailyLogs.length === 0 && <tr><td colSpan="5" className="p-8 text-gray-400 text-center border-dashed border-2">本日無需要代課的節次</td></tr>}
@@ -846,14 +734,7 @@ export default function SubstitutionApp() {
     );
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
-        <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.5)...</h2>
-      </div>
-    );
-  }
+  if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.6)...</h2></div>);
 
   return (
     <div className="min-h-screen bg-fuchsia-50 font-sans text-gray-800 pb-10 selection:bg-fuchsia-200">
@@ -862,19 +743,10 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.5</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.6</div>
              {isCloudEnabled ? 
-               <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
-                 <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
-                   <Cloud size={10} className="mr-1"/> 雲端同步
-                 </span>
-                 {saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}
-                 {saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}
-               </div>
-               : 
-               <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。請檢查 Firebase Console 設定。")}>
-                 <CloudOff size={10} className="mr-1"/> 本機模式
-               </span>
+               <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
+               : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
              }
           </div>
           <div className="flex space-x-1">
