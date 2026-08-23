@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, ArrowRight, Heart, Save, RefreshCw, BookOpen, Cloud, CloudOff, Loader2, FileWarning, Image as ImageIcon } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
-// --- 常數設定 ---
+// --- 常數設定 (v4.6) ---
 const TOTAL_PERIODS = 9;
 const PERIODS = Array.from({ length: TOTAL_PERIODS }, (_, i) => i + 1);
 const CORE_SUBJECTS = ['中文', '英文', '數學', 'CHI', 'ENG', 'MATH', 'CHINESE', 'ENGLISH', 'MATHEMATICS'];
@@ -18,6 +18,17 @@ const getInitialDate = () => {
   else if (day === 0) d.setDate(d.getDate() + 1);
   const tzOffset = d.getTimezoneOffset() * 60000;
   return new Date(d - tzOffset).toISOString().split('T')[0];
+};
+
+// 輔助函式：教師排序 (v4.6 補回修復)
+const getSortedTeachers = (teacherList) => {
+  const safeList = Array.isArray(teacherList) ? teacherList : [];
+  return [...safeList].sort((a, b) => {
+    const orderA = a?.sortOrder !== undefined ? a.sortOrder : 9999;
+    const orderB = b?.sortOrder !== undefined ? b.sortOrder : 9999;
+    if (orderA !== orderB) return orderA - orderB;
+    return (a?.name || '').localeCompare(b?.name || '', "zh-HK");
+  });
 };
 
 export default function SubstitutionApp() {
@@ -115,6 +126,31 @@ export default function SubstitutionApp() {
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
 
+  // 手動上傳雲端 (v4.6 補回修復)
+  const handleManualCloudUpload = async () => {
+    if (!isCloudEnabled || !dbRef.current) {
+      showAlert("提示", "目前為本機模式或無 Firebase 連線，無法手動上傳。");
+      return;
+    }
+    setSaveStatus('saving');
+    try {
+      const safeTeachers = Array.isArray(teachers) ? teachers : [];
+      const safeLogs = Array.isArray(logs) ? logs : [];
+      await setDoc(doc(dbRef.current, "school_data", "main_backup_v3"), {
+        teachers: safeTeachers,
+        logs: safeLogs,
+        lastUpdated: new Date().toISOString()
+      });
+      setLastSaved(new Date());
+      setSaveStatus('idle');
+      showAlert("成功", "資料已成功手動同步至雲端！");
+    } catch (err) {
+      console.error(err);
+      setSaveStatus('error');
+      showAlert("錯誤", "上傳至雲端失敗，請檢查網路連線。");
+    }
+  };
+
   // 下載圖片功能
   const downloadImage = (elementId, filename) => {
     const script = document.createElement('script');
@@ -148,7 +184,7 @@ export default function SubstitutionApp() {
         const detail = t.scheduleDetails?.[`${dayOfWeek}-${p}`];
         const cName = detail?.className || '';
         const isSupport = detail?.isSupport === true;
-        const isSClass = isSupport || cName.toUpperCase().includes('S'); // S班或抽離班
+        const isSClass = isSupport || cName.toUpperCase().includes('S');
         
         newLogs.push({
           id: Date.now() + Math.random(),
@@ -172,7 +208,6 @@ export default function SubstitutionApp() {
     setNewAbsentId('');
   };
 
-  // V4.5: 三大名單分類與邏輯
   const getCategorizedTeachers = () => {
     if (!activeCell) return { recommended: [], subbedOne: [], notArranged: [] };
     const safeTeachers = Array.isArray(teachers) ? teachers : [];
@@ -180,7 +215,6 @@ export default function SubstitutionApp() {
     const p = activeCell.period;
     const dayOfWeek = new Date(formDate).getDay();
     const targetKey = `${dayOfWeek}-${p}`; 
-    const normClass = (activeCell.className || '').trim().toUpperCase();
     const dailyLogs = safeLogs.filter(l => l?.date === formDate);
     const absentTeacherIds = [...new Set(dailyLogs.map(l => l.absentId))].filter(Boolean); 
 
@@ -208,7 +242,6 @@ export default function SubstitutionApp() {
       const isSupport = detail?.isSupport === true;
       const supportClass = detail?.className || '';
       
-      // 是否在該節可以代課 (原本是空堂 或 是入班支援)
       const isFreeAtP = baseFree.includes(p) && !subbedLogs.some(l => l.period === p && !l.isSwap);
       const canSubAtP = isFreeAtP || isSupport; 
 
@@ -257,7 +290,6 @@ export default function SubstitutionApp() {
 
   const handleAssignSub = (t) => {
     if (!t) return;
-    const p = activeCell.period;
     const dayOfWeek = new Date(formDate).getDay();
 
     if (t.isPT || t.isTA) {
@@ -288,7 +320,6 @@ export default function SubstitutionApp() {
     const opt = swapModal.selectedOption;
     const t = swapModal.subTeacher;
     if (opt.period === -1) {
-        // 不轉堂，當作額外代課 -> 檢查剩餘空堂
         if (t.actualFreeCount - 1 < 2) {
             showConfirm("警告", `此老師代課後，當日空堂將不足2節 (剩餘 ${t.actualFreeCount - 1} 節)。確定要強行安排嗎？`, () => {
                 commitAssign(swapModal.logId, t.id, t.name, '(額外代課)', false);
@@ -315,7 +346,7 @@ export default function SubstitutionApp() {
     setLogs(prev => (Array.isArray(prev)?prev:[]).filter(l => l.id !== activeCell.logId));
     setActiveCell(null);
   };
-  // --- 教師設定 CRUD ---
+
   const addTeacher = (e) => {
     e.preventDefault();
     if(newName.trim()) {
@@ -323,6 +354,7 @@ export default function SubstitutionApp() {
       setNewTitle(''); setNewName('');
     }
   };
+
   const deleteTeacher = (id) => showConfirm("刪除確認", "確定要刪除這位老師嗎？", () => {
     setTeachers(prev => (Array.isArray(prev)?prev:[]).filter(t => t.id !== id));
     closeModal();
@@ -467,7 +499,7 @@ export default function SubstitutionApp() {
     let csv = `\ufeff職銜,姓名,${statsMonth} 缺課,${statsMonth} 代課,淨值\n`;
     getSortedTeachers(teachers).forEach(t => {
       const monthAbs = monthLogs.filter(l => l?.absentId === t.id).length;
-      const monthSubs = monthLogs.filter(l => l?.subId === t.id && l?.subId !== 'CANCELLED' && !l?.isSwap).length; // V4.5 取消和轉堂都不算額外代課
+      const monthSubs = monthLogs.filter(l => l?.subId === t.id && l?.subId !== 'CANCELLED' && !l?.isSwap).length;
       csv += `${t?.title||''},${t?.name||''},${monthAbs},${monthSubs},${monthSubs - monthAbs}\n`;
     });
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
@@ -510,7 +542,7 @@ export default function SubstitutionApp() {
     if (!modal.isOpen) return null;
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200 border border-purple-100">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden border border-purple-100">
           <div className="p-4 border-b border-purple-100 flex items-center justify-between bg-purple-50">
             <h3 className="font-bold text-lg flex items-center text-purple-900">{modal.title}</h3>
             <button onClick={closeModal} className="text-purple-400 hover:text-purple-600"><X size={20} /></button>
@@ -531,7 +563,7 @@ export default function SubstitutionApp() {
     if (!swapModal.isOpen) return null;
     return (
       <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200 border border-blue-100">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden border border-blue-100">
           <div className="p-4 border-b border-blue-100 bg-blue-50">
             <h3 className="font-bold text-lg text-blue-900">選擇轉空堂的節次</h3>
             <p className="text-sm text-gray-600 mt-1">請選擇 <strong>{swapModal.subTeacher?.name}</strong> 老師哪一節入班轉為空堂：</p>
@@ -603,7 +635,7 @@ export default function SubstitutionApp() {
     return (
       <div className="flex flex-col md:flex-row gap-4 h-[75vh]">
         {/* 左側：推薦名單 */}
-        <div className="w-full md:w-1/3 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full overflow-hidden animate-in fade-in slide-in-from-left-4">
+        <div className="w-full md:w-1/3 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full overflow-hidden">
           <h3 className="font-bold text-lg text-purple-900 mb-3 border-b border-purple-100 pb-2 flex items-center">
             <Star className="mr-2 text-fuchsia-500" size={18}/> 安排操作
           </h3>
@@ -663,7 +695,7 @@ export default function SubstitutionApp() {
         </div>
 
         {/* 右側：並列表格 */}
-        <div className="flex-1 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full animate-in fade-in slide-in-from-right-4">
+        <div className="flex-1 bg-white p-4 rounded-xl border border-purple-100 shadow-sm flex flex-col h-full">
            <div className="flex flex-wrap justify-between items-end mb-4 border-b border-gray-100 pb-4">
               <div className="flex gap-3 items-end">
                   <div>
@@ -752,10 +784,9 @@ export default function SubstitutionApp() {
   };
 
   const renderTeachersView = () => {
-    // ...保持V4.4相同，為節省字數直接省略內容顯示，請確保與前版一致...
     const sortedTeachers = getSortedTeachers(teachers);
     return (
-      <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4 animate-in fade-in zoom-in duration-300">
+      <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 space-y-4">
         <div className="flex flex-wrap justify-between items-center gap-2">
           <h2 className="text-xl font-bold text-purple-800 flex items-center"><UserCheck className="mr-2"/> 教師設定</h2>
           <div className="flex gap-2">
@@ -813,7 +844,6 @@ export default function SubstitutionApp() {
   };
 
   const renderStatsView = () => {
-    // ...保持V4.4相同
     const safeLogs = Array.isArray(logs) ? logs : [];
     const monthLogs = safeLogs.filter(l => (l?.date || '').startsWith(statsMonth));
     const statsData = getSortedTeachers(teachers).map(t => {
@@ -823,7 +853,7 @@ export default function SubstitutionApp() {
     });
 
     return (
-      <div className="space-y-6 animate-in fade-in zoom-in duration-300">
+      <div className="space-y-6">
         <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100">
           <div className="flex justify-between items-center mb-4 flex-wrap gap-4">
             <h2 className="text-xl font-bold text-purple-800 flex items-center"><BarChart3 className="mr-2"/> 每月缺代課統計</h2>
@@ -869,7 +899,7 @@ export default function SubstitutionApp() {
     const uniqueAbsents = [...new Set(dailyLogs.map(l => l?.absentName))].filter(Boolean);
 
     return (
-      <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300">
+      <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold text-purple-800 flex items-center"><Clock className="mr-2"/> 每日代課名單</h2>
           <div className="flex items-center gap-3">
@@ -927,7 +957,7 @@ export default function SubstitutionApp() {
     return (
       <div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center">
         <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (V4.5)...</h2>
+        <h2 className="text-xl font-bold text-purple-800">正在同步資料 (v4.6)...</h2>
       </div>
     );
   }
@@ -939,7 +969,7 @@ export default function SubstitutionApp() {
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg sticky top-0 z-40 backdrop-blur-md bg-opacity-90">
         <div className="max-w-[1200px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center">
-             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V4.5</div>
+             <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 v4.6</div>
              {isCloudEnabled ? 
                <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}>
                  <span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30">
