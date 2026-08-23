@@ -111,13 +111,14 @@ export default function SubstitutionApp() {
   const showConfirm = (title, message, onConfirm) => setModal({ isOpen: true, type: 'confirm', title, message, onConfirm });
   const closeModal = () => setModal({ ...modal, isOpen: false });
 
+  // V5.0 防呆排序：確保每個物件都不是 null，避免讀取屬性時崩潰
   const getSortedTeachers = (list) => {
     if (!Array.isArray(list)) return [];
-    return [...list].sort((a, b) => {
-      const orderA = a.sortOrder !== undefined ? a.sortOrder : 9999;
-      const orderB = b.sortOrder !== undefined ? b.sortOrder : 9999;
+    return [...list].filter(t => t !== null && t !== undefined).sort((a, b) => {
+      const orderA = a?.sortOrder !== undefined ? a.sortOrder : 9999;
+      const orderB = b?.sortOrder !== undefined ? b.sortOrder : 9999;
       if (orderA !== orderB) return orderA - orderB;
-      return (a.name || '').localeCompare(b.name || '', "zh-HK");
+      return (a?.name || '').localeCompare(b?.name || '', "zh-HK");
     });
   };
 
@@ -649,7 +650,7 @@ export default function SubstitutionApp() {
                 <tr key={t?.id || index} className="hover:bg-purple-50 bg-white">
                   <td className="p-3 text-center">
                     <div className="flex flex-col gap-1 items-center justify-center">
-                      <button onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button><button onClick={() => moveTeacher(index, 'down')} disabled={index===(teachers.length-1)} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
+                      <button onClick={() => moveTeacher(index, 'up')} disabled={index===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▲</button><button onClick={() => moveTeacher(index, 'down')} disabled={index===((getSortedTeachers(teachers)||[]).length-1)} className="text-gray-400 hover:text-purple-600 disabled:opacity-30 leading-none">▼</button>
                     </div>
                   </td>
                   <td className="p-3 text-gray-500 font-medium text-xs">{t?.title || '-'}</td><td className="p-3 font-medium">{t?.name || '未知'}</td>
