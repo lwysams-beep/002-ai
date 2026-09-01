@@ -102,7 +102,7 @@ export default function SubstitutionApp() {
     initData();
   }, []);
 
-  // V6.2: 監聽日期變更，自動更新所有老師當日空堂
+  // 監聽日期變更，自動更新所有老師當日空堂
   useEffect(() => {
     setTeachers(prev => {
       const dayOfWeek = new Date(formDate).getDay();
@@ -232,7 +232,7 @@ export default function SubstitutionApp() {
     const targetKey = `${dayOfWeek}-${p}`; 
     const normClass = (activeCell.className || '').trim().toUpperCase();
     const dailyLogs = (Array.isArray(logs)?logs:[]).filter(l => l?.date === formDate);
-    const absentTeacherIds = [...new Set(dailyLogs.map(l => String(l.absentId)))].filter(Boolean); 
+    const absentTeacherIds = [...new Set(dailyLogs.map(l => String(l?.absentId)))].filter(Boolean); 
     const monthLogs = (Array.isArray(logs)?logs:[]).filter(l => (l?.date || '').startsWith(statsMonth));
 
     const allMapped = (Array.isArray(teachers)?teachers:[]).filter(t=>t!==null).map(t => {
@@ -250,12 +250,16 @@ export default function SubstitutionApp() {
       const isTA = title.includes('TA');
       const isSpecialRole = isExtSub || isIntern || isPT || isTA;
 
+      // 檢查是否任教本班（排除抽離任教）
       let isCore1 = false; let core1Sub = "";
       let isCore2 = false; let core2Sub = "";
       if (normClass && t.scheduleDetails) {
           for (const key in t.scheduleDetails) {
               const c = t.scheduleDetails[key];
               if ((c?.className || '').toUpperCase() === normClass) {
+                  // 抽離任教 (isSupport: true) 不應視作任教本班
+                  if (c?.isSupport) continue;
+
                   const subj = (c?.subject || '').toUpperCase();
                   if (CORE1_SUBJECTS.some(s => subj.includes(s))) { isCore1 = true; core1Sub = c.subject; } 
                   else if (CORE2_SUBJECTS.some(s => subj.includes(s))) { isCore2 = true; core2Sub = c.subject; }
@@ -279,6 +283,8 @@ export default function SubstitutionApp() {
       const detail = t.scheduleDetails?.[targetKey];
       const isSupport = detail?.isSupport === true;
       const supportClass = detail?.className || '';
+      const currentClass = detail?.className || '';
+      const currentSubject = detail?.subject || '';
       
       const isFreeAtP = baseFree.includes(p) && !isAlreadySubbingThisPeriod;
       const canSubAtP = isFreeAtP || isSupport; 
@@ -295,6 +301,7 @@ export default function SubstitutionApp() {
           ...t, freePeriods: baseFree, extraSubCount, actualFreeCount, isSpecialRole, rolePriority, 
           isExtSub, isIntern, isPT, isTA, isCore1, core1Sub, isCore2, core2Sub, isOwe,
           isSupport, supportClass, currentStatus, canSubAtP, busyClass,
+          currentClass, currentSubject,
           isAlreadySubbingThisPeriod, isAbsent: absentTeacherIds.includes(String(t.id))
       };
     });
@@ -440,7 +447,6 @@ export default function SubstitutionApp() {
     });
   };
   
-  // V6.2 新增：手動切換空堂時，同步修改 masterSchedule，保證跨日期資料一致
   const toggleFreePeriod = (teacherId, period) => {
     setTeachers(prev => {
       const safePrev = Array.isArray(prev) ? prev : [];
@@ -459,13 +465,12 @@ export default function SubstitutionApp() {
               updatedFreePeriods.sort((a, b) => a - b);
           }
 
-          // 同步寫入總表 masterSchedule
           const ms = t.masterSchedule || {};
           let busyArray = ms[dayOfWeek] || [];
           if (!isCurrentlyFree) {
-              busyArray = busyArray.filter(p => p !== period); // 變成空堂，移除 busy
+              busyArray = busyArray.filter(p => p !== period);
           } else {
-              if (!busyArray.includes(period)) busyArray.push(period); // 變成不空堂，加入 busy
+              if (!busyArray.includes(period)) busyArray.push(period);
               busyArray.sort((a,b)=>a-b);
           }
           ms[dayOfWeek] = busyArray;
@@ -476,6 +481,7 @@ export default function SubstitutionApp() {
       });
     });
   };
+
   const handleSortImport = (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -647,6 +653,7 @@ export default function SubstitutionApp() {
       </div>
     );
   };
+
   const renderTeacherGroup = (list) => {
     if (!list || list.length === 0) return null;
     return list.map(t => (
@@ -661,6 +668,19 @@ export default function SubstitutionApp() {
             {t.isExtSub && <div className="text-[10px] text-indigo-600 font-bold mt-1 bg-indigo-50 inline-block px-1 rounded border border-indigo-200 mr-1">外聘代課</div>}
             {t.isIntern && <div className="text-[10px] text-teal-600 font-bold mt-1 bg-teal-50 inline-block px-1 rounded border border-teal-200 mr-1">實習</div>}
             {(t.isPT || t.isTA) && ( <div className={`text-[10px] font-bold mt-1 inline-block px-1 rounded border mr-1 ${t.currentStatus === '空堂' ? 'text-green-600 bg-green-50 border-green-200' : 'text-orange-600 bg-orange-50 border-orange-200'}`}>{t.isPT ? 'PT' : 'TA'} ({t.currentStatus})</div> )}
+            
+            {/* 正在上堂（入班）時顯示班別與科目 2 個 Tag */}
+            {t.currentStatus === '入班' && t.currentClass && (
+              <div className="text-[10px] font-bold mt-1 inline-block px-1 rounded border mr-1 text-purple-600 bg-purple-50 border-purple-200">
+                {t.currentClass}
+              </div>
+            )}
+            {t.currentStatus === '入班' && t.currentSubject && (
+              <div className="text-[10px] font-bold mt-1 inline-block px-1 rounded border mr-1 text-purple-600 bg-purple-50 border-purple-200">
+                {t.currentSubject}
+              </div>
+            )}
+
             {t.isSupport && t.rolePriority >= 5 && <div className="text-[10px] text-orange-600 mt-1 bg-orange-50 inline-block px-1 rounded mr-1">抽離 ({t.supportClass})</div>}
           </div>
           <button type="button" onClick={() => handleAssignSub(t)} className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-fuchsia-500 text-white rounded text-xs shadow">指派</button>
@@ -940,7 +960,7 @@ export default function SubstitutionApp() {
     );
   };
 
-  if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料 (V5.9)...</h2></div>);
+  if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料...</h2></div>);
 
   return (
     <div className="h-screen bg-fuchsia-50 font-sans text-gray-800 selection:bg-fuchsia-200 overflow-hidden flex flex-col">
@@ -948,10 +968,9 @@ export default function SubstitutionApp() {
       {renderSwapModal()}
       <nav className="bg-gradient-to-r from-purple-700 via-fuchsia-600 to-pink-600 text-white shadow-lg z-40 shrink-0">
         <div className="max-w-[1850px] mx-auto px-4 py-2 flex flex-col gap-2">
-          {/* 上半部：標題與系統狀態 */}
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 V5.9</div>
+               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統</div>
                {isCloudEnabled ? 
                  <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                  : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
@@ -964,7 +983,6 @@ export default function SubstitutionApp() {
             </div>
           </div>
           
-          {/* 下半部：V5.9 將缺席操作移至全域導航列 */}
           <div className="flex items-center bg-white/10 p-2 rounded-lg gap-4 backdrop-blur-sm border border-white/20 overflow-x-auto">
             <div className="flex items-center gap-2 shrink-0">
               <label className="text-xs font-bold text-fuchsia-100">日期</label>
