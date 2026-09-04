@@ -1321,12 +1321,20 @@ const generateHtmlForReport = () => {
   PERIODS.forEach(p => rowsData[`L${p}`] = {});
 
   dailyLogs.forEach(log => {
-      if (log?.absentId && rowsData[`L${log.period}`]) {
-          const absentIdStr = String(log.absentId);
-          const subText = log.subId === 'CANCELLED' ? 'S班取消' : log.subName || '未安排';
-          rowsData[`L${log.period}`][absentIdStr] = `<p class="s2">${subText}${log.note ? ` (${log.note})` : ''}</p>`;
-      }
-  });
+    if (log?.absentId && rowsData[`L${log.period}`]) {
+        const absentIdStr = String(log.absentId);
+        const subText = log.subId === 'CANCELLED' ? 'S班取消' : (log.subName || '未安排');
+        
+        // 1. 處理備註格式：防止系統重複加括號 (例如原本已經有 (私下調堂))
+        const noteText = log.note ? (log.note.startsWith('(') ? ` ${log.note}` : ` (${log.note})`) : '';
+        
+        // 2. 處理班別：若有輸入班別，則在後方加上班別名稱
+        const classText = log.className ? ` ${log.className}` : '';
+
+        // 3. 組合輸出：代課老師 + 備註 + 班別
+        rowsData[`L${log.period}`][absentIdStr] = `<p class="s2">${classText}${subText}${noteText}</p>`;
+    }
+});
   
   const dateDuties = duties[formDate] || {};
   Object.keys(dateDuties).forEach(dutyId => {
@@ -1405,7 +1413,7 @@ const generateHtmlForReport = () => {
         <div className="max-w-[1850px] mx-auto px-4 py-2 flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 8.6</div>
+               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 8.8</div>
                {isCloudEnabled ? 
                  <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                  : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
