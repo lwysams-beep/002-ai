@@ -47,6 +47,8 @@ export default function SubstitutionApp() {
   const [currentView, setCurrentView] = useState('arrange'); 
   const [formDate, setFormDate] = useState(getInitialDate());
   
+  const [manualHtml, setManualHtml] = useState('');
+
   const [newAbsentId, setNewAbsentId] = useState('');
   const [newAbsentReason, setNewAbsentReason] = useState('病假');
   const [activeCell, setActiveCell] = useState(null); 
@@ -1401,6 +1403,57 @@ const generateHtmlForReport = () => {
     );
   };
   
+
+  // 手動頁面的 HTML 下載函式
+  const downloadManualHtmlReport = () => {
+    const container = document.getElementById('manual-page-capture-inner');
+    const innerContent = container ? container.innerHTML : '';
+    
+    const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>代課安排 (手動修改版)</title><style>.s1{font-size:16pt;font-family:sans-serif;}.s2{font-size:12pt;font-family:sans-serif;}.s3{font-size:12pt;font-family:sans-serif;}.s5{font-size:14pt;font-family:sans-serif;} table{border-collapse:collapse;} td{padding:4pt; text-align:center;}</style></head><body>${innerContent}</body></html>`;
+    
+    const blob = new Blob([fullHtml], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `代課日誌_手動修改_${formDate}.html`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // 載入/重置最新日誌資料
+  const handleResetManualHtml = () => {
+    const container = document.getElementById('manual-page-capture-inner');
+    if (container) {
+      container.innerHTML = generateHtmlForReport();
+      showAlert("提示", "已重置並載入最新的日誌資料！");
+    }
+  };
+
+  // 渲染「手動」頁面
+  const renderManualView = () => {
+    return (
+        <div className="bg-white p-6 rounded-2xl shadow-xl border border-purple-100 animate-in fade-in zoom-in duration-300 h-full flex flex-col">
+            <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-purple-800 flex items-center"><FileText className="mr-2"/> 手動代課日誌</h2>
+                  <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded border border-amber-200">獨立自由編輯區 (不連雲端資料)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={handleResetManualHtml} className="bg-gray-100 text-gray-700 hover:bg-gray-200 px-3 py-1.5 rounded-lg shadow-sm text-sm flex items-center border border-gray-300 font-normal"><RefreshCw size={14} className="mr-1"/> 載入/重置日誌</button>
+                  <button onClick={() => downloadImage('manual-page-capture-inner', `代課日誌_手動修改_${formDate}.png`)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-emerald-700 flex items-center font-normal"><ImageIcon size={14} className="mr-1"/> 下載圖片</button>
+                  <button onClick={downloadManualHtmlReport} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center font-normal"><Download size={14} className="mr-1"/> 下載 HTML</button>
+                </div>
+            </div>
+            <p className="text-xs text-gray-500 mb-2">💡 提示：你可以直接點擊下方表格內任何文字自由增刪修改。此處修改不會覆蓋系統或雲端資料。</p>
+            <div id="manual-page-capture-inner" contentEditable suppressContentEditableWarning className="flex-1 border-2 border-dashed border-purple-200 rounded-lg p-4 overflow-auto bg-white focus:outline-none focus:border-purple-500">
+                <div dangerouslySetInnerHTML={{ __html: manualHtml || generateHtmlForReport() }} />
+            </div>
+        </div>
+    );
+  };
+
+
   if (isLoading) return (<div className="min-h-screen bg-fuchsia-50 flex flex-col items-center justify-center"><Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" /><h2 className="text-xl font-bold text-purple-800">正在同步資料...</h2></div>);
 
   return (
@@ -1413,14 +1466,14 @@ const generateHtmlForReport = () => {
         <div className="max-w-[1850px] mx-auto px-4 py-2 flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 8.8</div>
+               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 8.9</div>
                {isCloudEnabled ? 
                  <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                  : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
                }
             </div>
             <div className="flex space-x-1">
-              {[{id:'arrange',label:'安排',icon:Search}, {id:'advanced',label:'進階',icon:ClipboardEdit}, {id:'report',label:'日誌',icon:Clock}, {id:'stats',label:'統計',icon:BarChart3}, {id:'teachers',label:'設定',icon:Users}].map(t=>(
+              {[{id:'arrange',label:'安排',icon:Search}, {id:'advanced',label:'進階',icon:ClipboardEdit}, {id:'report',label:'日誌',icon:Clock}, {id:'manual',label:'手動',icon:FileText}, {id:'stats',label:'統計',icon:BarChart3}, {id:'teachers',label:'設定',icon:Users}].map(t=>(
                 <button key={t.id} onClick={()=> setCurrentView(t.id)} className={`px-3 py-1.5 rounded-lg flex items-center text-sm transition-all duration-200 ${currentView===t.id?'bg-white/20 shadow-inner font-bold':'hover:bg-white/10 text-purple-100'}`}><t.icon size={14} className="mr-1.5"/>{t.label}</button>
               ))}
             </div>
@@ -1456,6 +1509,7 @@ const generateHtmlForReport = () => {
         {currentView==='stats' && renderStatsView()}
         {currentView === 'advanced' && renderAdvancedView()}
         {currentView==='report' && renderReportView()}
+        {currentView==='manual' && renderManualView()}
       </main>
     </div>
   );
