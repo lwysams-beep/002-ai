@@ -1,4 +1,4 @@
-// Version 9.1 - 智慧代課系統：逐格人工修改雲端保存
+// Version 9.0b - 智慧代課系統：逐格人工修改雲端保存與連續輸入修正版
 import React, { useState, useEffect, useRef } from 'react';
 import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, Cloud, CloudOff, Loader2, Save, RefreshCw, Image as ImageIcon, ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, ClipboardEdit, Sparkles, Lock, Unlock, CheckCheck } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
@@ -57,6 +57,7 @@ export default function SubstitutionApp() {
   const [manualLastSaved, setManualLastSaved] = useState(null);
   // V9.0a：逐格人工修改層。人工修改優先於系統重新生成的日誌。
   const [manualOverrides, setManualOverrides] = useState({});
+  const manualOverridesRef = useRef({});
 
   const [newAbsentId, setNewAbsentId] = useState('');
   const [newAbsentReason, setNewAbsentReason] = useState('病假');
@@ -177,6 +178,7 @@ export default function SubstitutionApp() {
         loaded = local ? (JSON.parse(local) || {}) : {};
       } catch (e) { loaded = {}; }
     }
+    manualOverridesRef.current = loaded || {};
     setManualOverrides(loaded || {});
     return loaded || {};
   };
@@ -184,6 +186,7 @@ export default function SubstitutionApp() {
   const saveManualOverrides = async (cells, showMessage = false) => {
     const safeCells = cells || {};
     localStorage.setItem(STORAGE_KEY_MANUAL_OVERRIDES_PREFIX + formDate, JSON.stringify(safeCells));
+    manualOverridesRef.current = safeCells;
     setManualOverrides(safeCells);
     if (!dbRef.current || !isCloudEnabled) {
       if (showMessage) showAlert('提示', '目前未連接 Firebase，逐格修改已先保存在本機。');
@@ -210,15 +213,16 @@ export default function SubstitutionApp() {
     if (!key) return;
     const value = cellEl.innerHTML;
     const original = cellEl.getAttribute('data-system-html') || '';
-    setManualOverrides(prev => {
-      const next = { ...(prev || {}) };
-      if (value === original) delete next[key];
-      else next[key] = { value, original, updatedAt: new Date().toISOString(), source: 'manual' };
-      localStorage.setItem(STORAGE_KEY_MANUAL_OVERRIDES_PREFIX + formDate, JSON.stringify(next));
-      if (manualSaveTimerRef.current) clearTimeout(manualSaveTimerRef.current);
-      manualSaveTimerRef.current = setTimeout(() => saveManualOverrides(next, false), 700);
-      return next;
-    });
+    const next = { ...(manualOverridesRef.current || {}) };
+    if (value === original) delete next[key];
+    else next[key] = { value, original, updatedAt: new Date().toISOString(), source: 'manual' };
+    // 重要：輸入期間只更新 ref，不觸發 React render，避免游標/輸入焦點被重設。
+    manualOverridesRef.current = next;
+    localStorage.setItem(STORAGE_KEY_MANUAL_OVERRIDES_PREFIX + formDate, JSON.stringify(next));
+    if (manualSaveTimerRef.current) clearTimeout(manualSaveTimerRef.current);
+    manualSaveTimerRef.current = setTimeout(() => {
+      saveManualOverrides(manualOverridesRef.current, false);
+    }, 700);
   };
 
   const applyManualOverridesToHtml = (html, overrides = manualOverrides) => {
@@ -295,7 +299,8 @@ export default function SubstitutionApp() {
 
   const saveManualHtmlToCloud = async (showMessage = false) => {
     const html = getManualEditorHtml();
-    setManualHtml(html);
+    const editorHasFocus = !!(manualEditorRef.current && document.activeElement && manualEditorRef.current.contains(document.activeElement));
+    if (!editorHasFocus) setManualHtml(html);
     localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, html);
 
     if (!dbRef.current || !isCloudEnabled) {
@@ -333,23 +338,31 @@ export default function SubstitutionApp() {
       const el = node?.nodeType === 1 ? node : node?.parentElement;
       cell = el?.closest?.('[data-manual-key]') || null;
     }
-    if (cell) recordManualCellEdit(cell);
-    // V9.0a：輸入中的 DOM 必須保持原狀，不能每打一個字就用 React state 重新灌回 innerHTML，
-    // 否則游標會被瀏覽器移走，造成「每輸入一隻字便要重新點一下」的問題。
-    // 逐格內容仍會由 recordManualCellEdit 即時保存；整頁 HTML 則延遲同步。
-    setManualCloudStatus('pending');
+    if (!cell) return;
+
+    recordManualCellEdit(cell);
+
+    // 輸入期間絕不 setState。否則 React 重新 render 會令 contentEditable 失去游標。
     if (manualSaveTimerRef.current) clearTimeout(manualSaveTimerRef.current);
-    manualSaveTimerRef.current = setTimeout(() => {
+    manualSaveTimerRef.current = setTimeout(async () => {
       const html = getManualEditorHtml();
-      setManualHtml(html);
+      const editorHasFocus = !!(manualEditorRef.current && document.activeElement && manualEditorRef.current.contains(document.activeElement));
+      if (!editorHasFocus) setManualHtml(html);
       localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, html);
-      saveManualHtmlToCloud(false);
+      await saveManualOverrides(manualOverridesRef.current, false);
+      await saveManualHtmlToCloud(false);
+      setManualCloudStatus('saved');
     }, 1200);
   };
 
   const handleManualEditorBlur = (e) => {
-    const cell = e?.target?.closest?.('[data-manual-key]') || (e?.target?.getAttribute?.('data-manual-key') ? e.target : null);
-    if (cell) recordManualCellEdit(cell);
+    const target = e?.target;
+    const cell = target?.closest?.('[data-manual-key]') || (target?.getAttribute?.('data-manual-key') ? target : null);
+    if (cell) {
+      recordManualCellEdit(cell);
+      // 離開方格後才更新 React 狀態，這時不會再破壞正在輸入的游標。
+      setManualCloudStatus('pending');
+    }
   };
   
   useEffect(() => {
@@ -1658,7 +1671,7 @@ const generateHtmlForReport = () => {
           const key = getManualCellKey(row.id, col.id);
           const override = getManualOverrideValue(row.id, col.id);
           const effectiveContent = override !== null ? override : content;
-          cells += `<td contenteditable="true" data-manual-key="${key}" data-system-html="${String(content).replace(/&/g,'&amp;').replace(/\"/g,'&quot;')}" style="width:109pt;border:1pt solid black;padding:4pt;">${effectiveContent}</td>`;
+          cells += `<td style="width:109pt;border:1pt solid black;padding:4pt;"><div contenteditable="true" data-manual-key="${key}" data-system-html="${String(content).replace(/&/g,'&amp;').replace(/\"/g,'&quot;')}" style="min-height:18px;outline:none;cursor:text;">${effectiveContent}</div></td>`;
       });
       bodyRows += `<tr style="height:23pt"><td style="border:1pt solid black;padding:4pt;"><p class="s3">${row.time}</p></td><td style="border:1pt solid black;padding:4pt;"><p class="s5">${row.label}</p></td>${cells}</tr>`;
   });
@@ -1763,7 +1776,7 @@ const generateHtmlForReport = () => {
         <div className="max-w-[1850px] mx-auto px-4 py-2 flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 9.0a</div>
+               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 9.0b</div>
                {isCloudEnabled ? 
                  <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                  : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
