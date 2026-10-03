@@ -1,6 +1,6 @@
-// Version 8.6
+// Version 9.0 - 智慧代課系統
 import React, { useState, useEffect, useRef } from 'react';
-import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, Cloud, CloudOff, Loader2, Save, RefreshCw, Image as ImageIcon, ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, ClipboardEdit } from 'lucide-react';
+import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, Cloud, CloudOff, Loader2, Save, RefreshCw, Image as ImageIcon, ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, ClipboardEdit, Sparkles, Lock, Unlock, CheckCheck } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
 
 // --- 常數設定 ---
@@ -14,6 +14,7 @@ const SWAPPABLE_SUBJECTS = ['體驗', 'Me Time', '藝創', '3S'];
 const STORAGE_KEY_TEACHERS = 'substitution_system_teachers_data_v3';
 const STORAGE_KEY_LOGS = 'substitution_system_logs_data_v3';
 const STORAGE_KEY_DUTIES = 'substitution_system_duties_data_v1';
+const STORAGE_KEY_MANUAL_PREFIX = 'substitution_system_manual_html_v9_';
 
 const getInitialDate = () => {
   const d = new Date();
@@ -48,6 +49,10 @@ export default function SubstitutionApp() {
   const [formDate, setFormDate] = useState(getInitialDate());
   
   const [manualHtml, setManualHtml] = useState('');
+  const manualEditorRef = useRef(null);
+  const manualSaveTimerRef = useRef(null);
+  const [manualCloudStatus, setManualCloudStatus] = useState('idle');
+  const [manualLastSaved, setManualLastSaved] = useState(null);
 
   const [newAbsentId, setNewAbsentId] = useState('');
   const [newAbsentReason, setNewAbsentReason] = useState('病假');
@@ -59,6 +64,9 @@ export default function SubstitutionApp() {
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
   const [editableAbsentCounts, setEditableAbsentCounts] = useState({});
   const [confirmState, setConfirmState] = useState({});
+  const [smartState, setSmartState] = useState({isOpen:false, mode:'priority', selectedLogIds:[], suggestions:[], generated:false});
+  const [smartPrompted, setSmartPrompted] = useState({});
+  const [optimizationVersion, setOptimizationVersion] = useState(0);
 
   const teacherImportRef = useRef(null);
   const timetableImportRef = useRef(null);
@@ -138,6 +146,83 @@ export default function SubstitutionApp() {
     setActiveCell(null);
     setConfirmState({});
   }, [formDate]);
+
+  // V9.0：獨立自由編輯區使用獨立 Firebase 文件，以日期分開儲存。
+  // 不寫入 main_backup_v3，因此不會影響正式代課、日誌及統計。
+  useEffect(() => {
+    let cancelled = false;
+    const loadManualCloud = async () => {
+      setManualCloudStatus('loading');
+      try {
+        if (dbRef.current && isCloudEnabled) {
+          const snap = await getDoc(doc(dbRef.current, 'manual_editor', formDate));
+          if (!cancelled && snap.exists()) {
+            const html = snap.data()?.html || '';
+            setManualHtml(html);
+            setManualLastSaved(snap.data()?.updatedAt ? new Date(snap.data().updatedAt) : null);
+            setManualCloudStatus('saved');
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('自由編輯區雲端讀取失敗', e);
+      }
+
+      // 沒有雲端內容時保留本機日期備份，避免切換日期後內容消失。
+      const local = localStorage.getItem(STORAGE_KEY_MANUAL_PREFIX + formDate);
+      if (!cancelled) {
+        setManualHtml(local || '');
+        setManualCloudStatus(local ? 'local' : 'idle');
+        setManualLastSaved(null);
+      }
+    };
+    if (!isLoading) loadManualCloud();
+    return () => { cancelled = true; };
+  }, [formDate, isCloudEnabled, isLoading]);
+
+  const getManualEditorHtml = () => {
+    const container = manualEditorRef.current;
+    return container ? container.innerHTML : manualHtml;
+  };
+
+  const saveManualHtmlToCloud = async (showMessage = false) => {
+    const html = getManualEditorHtml();
+    setManualHtml(html);
+    localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, html);
+
+    if (!dbRef.current || !isCloudEnabled) {
+      setManualCloudStatus('local');
+      if (showMessage) showAlert('提示', '目前未連接 Firebase，內容已先保存在本機。');
+      return;
+    }
+
+    setManualCloudStatus('saving');
+    try {
+      const now = new Date();
+      await setDoc(doc(dbRef.current, 'manual_editor', formDate), {
+        date: formDate,
+        html,
+        updatedAt: now.toISOString(),
+        version: 9
+      }, { merge: true });
+      setManualLastSaved(now);
+      setManualCloudStatus('saved');
+      if (showMessage) showAlert('成功', `自由編輯區 ${formDate} 已儲存到雲端。`);
+    } catch (e) {
+      console.error('自由編輯區雲端儲存失敗', e);
+      setManualCloudStatus('error');
+      if (showMessage) showAlert('錯誤', '自由編輯區雲端儲存失敗，內容仍保留在本機。');
+    }
+  };
+
+  const handleManualEditorInput = () => {
+    const html = getManualEditorHtml();
+    setManualHtml(html);
+    localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, html);
+    setManualCloudStatus('pending');
+    if (manualSaveTimerRef.current) clearTimeout(manualSaveTimerRef.current);
+    manualSaveTimerRef.current = setTimeout(() => saveManualHtmlToCloud(false), 1200);
+  };
   
   useEffect(() => {
       const dailyLogs = (Array.isArray(logs) ? logs : []).filter(l => l?.date === formDate);
@@ -248,7 +333,7 @@ export default function SubstitutionApp() {
       }
 
       const monthAbs = monthLogs.filter(l => String(l?.absentId) === String(t.id) && l.isCountedAbsence).length;
-      const monthSubs = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.subId !== 'CANCELLED' && !l?.isSwap).length;
+      const monthSubs = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.subId !== 'CANCELLED' && l?.subId !== 'MAINSTREAM_RETURN' && !l?.isSwap && l?.assignmentType !== 'transfer').length;
       const isOwe = monthAbs > monthSubs;
 
       let rolePriority = 8;
@@ -379,14 +464,15 @@ export default function SubstitutionApp() {
     periodsToLog.forEach((p) => {
       const detail = t.scheduleDetails?.[`${dayOfWeek}-${p}`];
       const cName = detail?.className || '';
-      const isSClass = detail?.isSupport === true || cName.toUpperCase().includes('S');
+      const isSClass = detail?.isSupport === true || /(^|[^A-Z])S(?:班)?$/i.test(cName.trim());
 
       newLogs.push({
         id: Date.now() + Math.random() + p,
         date: formDate, period: p, className: cName,
+        subject: detail?.subject || '', isSClass,
         absentName: t.name, absentId: t.id, reason: newAbsentReason,
-        subName: isSClass ? 'S班取消' : null, subId: isSClass ? 'CANCELLED' : null,
-        note: '', isSwap: false, 
+        subName: null, subId: null, assignmentType: 'pending', locked: false, generatedBy: 'manual',
+        note: '', isSwap: false,
         isCountedAbsence: false, 
         timestamp: new Date().toLocaleString()
       });
@@ -401,6 +487,7 @@ export default function SubstitutionApp() {
       setAbsentColOrder(prev => [...prev, String(newAbsentId)]);
     }
     setNewAbsentId('');
+    setTimeout(() => { if ([...new Set((logs || []).filter(l => l?.date === formDate && !String(l.absentId).startsWith('FROM_')).map(l => String(l.absentId)))].length + 1 >= 3 && !smartPrompted[formDate]) { setSmartPrompted(p => ({...p,[formDate]:true})); showConfirm('智慧代課建議', '今日已有至少 3 位缺席老師，是否進行一次智慧代課規劃？', () => { closeModal(); openSmartScheduler(); }); } }, 0);
   };
 
   const handleDeleteAbsentTeacher = (absentId) => {
@@ -416,13 +503,8 @@ export default function SubstitutionApp() {
     });
   };
 
-  const commitAssign = (logId, subId, subName, note, isSwap) => {
-    setLogs(prev => (Array.isArray(prev)?prev:[]).map(l => {
-      if (l.id === logId) {
-        return { ...l, subId, subName, note, isSwap };
-      }
-      return l;
-    }));
+  const commitAssign = (logId, subId, subName, note, isSwap, meta = {}) => {
+    setLogs(prev => (Array.isArray(prev)?prev:[]).map(l => l.id === logId ? ({ ...l, subId, subName, note, isSwap, assignmentType: meta.assignmentType || (isSwap ? 'transfer' : 'normal'), locked: meta.locked !== undefined ? meta.locked : true, generatedBy: meta.generatedBy || 'manual', optimizationVersion: meta.optimizationVersion || null }) : l));
     setActiveCell(null);
   };
 
@@ -709,11 +791,12 @@ export default function SubstitutionApp() {
 
   const exportStatsToCSV = () => {
     const monthLogs = (Array.isArray(logs)?logs:[]).filter(l => (l?.date || '').startsWith(statsMonth));
-    let csv = `\ufeff職銜,姓名,${statsMonth} 缺課,${statsMonth} 代課,淨值\n`;
+    let csv = `\ufeff職銜,姓名,${statsMonth} 缺課,${statsMonth} 代課,${statsMonth} 調堂,淨值\n`;
     getSortedTeachers(teachers).forEach(t => {
       const monthAbs = monthLogs.filter(l => String(l?.absentId) === String(t.id) && l.isCountedAbsence).length;
-      const monthSubs = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.subId !== 'CANCELLED' && !l?.isSwap).length; 
-      csv += `${t?.title||''},${t?.name||''},${monthAbs},${monthSubs},${monthSubs - monthAbs}\n`;
+      const monthSubs = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.subId !== 'CANCELLED' && l?.subId !== 'MAINSTREAM_RETURN' && !l?.isSwap && l?.assignmentType !== 'transfer').length; 
+      const monthTransfers = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.assignmentType === 'transfer' && !l?.superseded).length;
+       csv += `${t?.title||''},${t?.name||''},${monthAbs},${monthSubs},${monthTransfers},${monthSubs - monthAbs}\n`;
     });
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a'); link.href = url; link.setAttribute('download', `stats_${statsMonth}.csv`);
@@ -751,6 +834,81 @@ export default function SubstitutionApp() {
     };
     reader.readAsText(file);
   };
+
+  // ================= V9.0 智慧代課引擎 =================
+  const dailyLogs = () => (Array.isArray(logs)?logs:[]).filter(l => l?.date === formDate && !String(l?.absentId || '').startsWith('FROM_'));
+  const absentIdsToday = () => [...new Set(dailyLogs().map(l => String(l.absentId)))];
+  const changeable = l => !!l && !l.locked && !l.started;
+  const subCount = (id, list=dailyLogs()) => list.filter(l => String(l.subId)===String(id) && l.subId!=='CANCELLED' && l.subId!=='MAINSTREAM_RETURN' && !l.superseded && l.assignmentType!=='transfer').length;
+  const freeCount = (t,list=dailyLogs()) => Math.max(0,(t?.freePeriods||[]).length-subCount(t.id,list));
+  const teacherFree = (t,p,list=dailyLogs()) => !!t && !absentIdsToday().includes(String(t.id)) && (t.freePeriods||[]).includes(p) && !list.some(l=>String(l.subId)===String(t.id)&&Number(l.period)===Number(p)&&!l.superseded&&l.subId!=='CANCELLED');
+  const priorityOf = (t,target,list=dailyLogs()) => {
+    const d=t.scheduleDetails?.[`${new Date(formDate).getDay()}-${target.period}`]; const cls=String(target.className||'').toUpperCase(); const title=String(t.title||'').toUpperCase(); let p=8;
+    if(title.includes('外聘')||title.includes('代課')||t.name==='吳詠詩')p=1; else if(title.includes('實習'))p=2; else if(title.includes('PT'))p=3; else if(title.includes('TA'))p=4;
+    else if(d&&!d.isSupport&&String(d.className||'').toUpperCase()===cls&&CORE1_SUBJECTS.some(x=>String(d.subject||'').toUpperCase().includes(x)))p=5;
+    else if(d&&!d.isSupport&&String(d.className||'').toUpperCase()===cls&&CORE2_SUBJECTS.some(x=>String(d.subject||'').toUpperCase().includes(x)))p=6;
+    else if((list.filter(l=>String(l.absentId)===String(t.id)&&l.isCountedAbsence).length)>subCount(t.id,list))p=7; return p;
+  };
+  const candidateFor = (t,target,list,mode) => {
+    if(!teacherFree(t,target.period,list)||String(t.id)===String(target.absentId))return null;
+    const p=priorityOf(t,target,list), sc=subCount(t.id,list), remain=freeCount(t,list)-1, d=t.scheduleDetails?.[`${new Date(formDate).getDay()}-${target.period}`];
+    const sameClass=!!d&&!d.isSupport&&String(d.className||'').toUpperCase()===String(target.className||'').toUpperCase();
+    const sameSubject=!!d&&String(d.subject||'').toUpperCase()===String(target.subject||'').toUpperCase();
+    const score=Math.max(0,45-(p-1)*5)+Math.min(20,Math.max(0,remain)*2)+Math.max(0,3-sc)*4+(sameClass?10:0)+(sameSubject?5:0);
+    const reasons=[`Priority ${p}`,sc?`今日已代 ${sc} 節`:'今日尚未代課']; if(remain>=2)reasons.push(`安排後仍有 ${remain} 節空堂`); if(sameClass)reasons.push('任教本班'); if(sameSubject)reasons.push('科目相符');
+    return {teacherId:t.id,teacherName:t.name,priority:p,score:Math.round(score),reason:reasons.join('＋'),subCount:sc,remain};
+  };
+  const buildSmartSuggestions = (targets,mode) => {
+    const list=dailyLogs().map(x=>({...x}));
+    const planned=[];
+    const workingTargets=targets.filter(changeable).sort((a,b)=>Number(a.period)-Number(b.period));
+    const selectedIds=new Set(workingTargets.map(x=>String(x.id)));
+    const findChain = (target, workingList, seenTeachers=new Set(), depth=0) => {
+      if(depth > teachers.length + workingTargets.length + 5) return null;
+      const candidates=getSortedTeachers(teachers).map(t=>candidateFor(t,target,workingList,mode)).filter(Boolean).filter(c=>!seenTeachers.has(String(c.teacherId)));
+      candidates.sort((a,b)=>mode==='priority'?(a.priority-b.priority||a.subCount-b.subCount||b.remain-a.remain):(b.score-a.score||a.priority-b.priority||a.subCount-b.subCount));
+      for(const c of candidates){
+        return {type:'direct',candidate:c,changes:[]};
+      }
+      // 鏈式轉配：若沒有空堂老師，找一位「尚未鎖定」且目前正代另一課的老師，
+      // 再遞迴替換那一課；深度沒有固定上限，只以教師/課節數防止循環。
+      const busyTeacherIds=[...new Set(workingList.filter(l=>Number(l.period)===Number(target.period)&&l.subId&&l.subId!=='CANCELLED'&&l.subId!=='MAINSTREAM_RETURN'&&!l.superseded&&selectedIds.has(String(l.id))&&changeable(l)).map(l=>String(l.subId)))];
+      for(const tid of busyTeacherIds){
+        if(seenTeachers.has(tid)) continue;
+        const assignedLog=workingList.find(l=>String(l.subId)===tid&&Number(l.period)===Number(target.period)&&selectedIds.has(String(l.id))&&changeable(l));
+        if(!assignedLog) continue;
+        const nextSeen=new Set(seenTeachers); nextSeen.add(tid);
+        const replacement=findChain(assignedLog,workingList,nextSeen,depth+1);
+        if(replacement && replacement.type==='direct'){
+          return {type:'chain',candidate:{teacherId:tid,teacherName:teachers.find(t=>String(t.id)===tid)?.name||tid,priority:99,score:0,reason:'透過鏈式調整釋放原代課老師'},changes:[{logId:assignedLog.id,fromTeacher:assignedLog.subName,toTeacher:replacement.candidate.teacherName,toTeacherId:replacement.candidate.teacherId},...(replacement.changes||[])]};
+        }
+      }
+      return null;
+    };
+    return workingTargets.map(target=>{
+      const direct=getSortedTeachers(teachers).map(t=>candidateFor(t,target,list,mode)).filter(Boolean);
+      direct.sort((a,b)=>mode==='priority'?(a.priority-b.priority||a.subCount-b.subCount||b.remain-a.remain):(b.score-a.score||a.priority-b.priority||a.subCount-b.subCount));
+      let plan=direct[0]?{type:'direct',candidate:direct[0],changes:[]}:null;
+      if(!plan) plan=findChain(target,list,new Set(),0);
+      if(!plan)return {id:target.id,status:'unresolved',target,reason:'找不到符合空堂及每日最低空堂條件的老師，也找不到可行的鏈式調整方案。'};
+      const c=plan.candidate;
+      if(plan.changes?.length){
+        plan.changes.forEach(ch=>{const row=list.find(l=>l.id===ch.logId);if(row){row.subId=ch.toTeacherId;row.subName=ch.toTeacher;row.locked=false;}});
+      }
+      list.push({...target,subId:c.teacherId,subName:c.teacherName,assignmentType:'normal',locked:false});
+      const chainNote=plan.changes?.length?`；另透過 ${plan.changes.length} 層鏈式調整釋放老師`:'。';
+      return {id:target.id,status:'suggested',target,oldTeacher:target.subName||'未安排',newTeacher:c.teacherName,newTeacherId:c.teacherId,priority:c.priority,score:c.score,chainChanges:plan.changes||[],reason:mode==='priority'?`${c.teacherName} 的 Priority（${c.priority}）符合原 8.9 排序${chainNote}`:`${c.teacherName} ${c.score} 分；主要原因：${c.reason}${chainNote}`};
+    });
+  };
+  const openSmartScheduler = () => { const ids=dailyLogs().filter(l=>changeable(l)&&!l.subId).map(l=>l.id); setSmartState({isOpen:true,mode:'priority',selectedLogIds:ids,suggestions:[],generated:false}); };
+  const generateSmartPlan = () => { const targets=dailyLogs().filter(l=>smartState.selectedLogIds.includes(l.id)); if(!targets.length)return showAlert('智慧代課','請先選擇要處理的課節。'); setSmartState(p=>({...p,suggestions:buildSmartSuggestions(targets,p.mode),generated:true})); };
+  const applySmart = ids => { const ok=new Set(ids), version=optimizationVersion+1; const selected=(smartState.suggestions||[]).filter(x=>ok.has(x.id)&&x.status==='suggested'); if(!selected.length)return showAlert('智慧代課','沒有可套用的建議。'); setOptimizationVersion(version); setLogs(prev=>{ let next=prev.map(l=>({...l})); selected.forEach(x=>{ (x.chainChanges||[]).forEach(ch=>{ const row=next.find(l=>l.id===ch.logId); if(row&&changeable(row)){ row.subId=ch.toTeacherId; row.subName=ch.toTeacher; row.assignmentType='normal'; row.locked=true; row.generatedBy='auto'; row.optimizationVersion=version; }}); }); selected.forEach(x=>{const row=next.find(l=>l.id===x.id); if(row&&changeable(row)){row.subId=x.newTeacherId;row.subName=x.newTeacher;row.note=row.note||'';row.isSwap=false;row.assignmentType='normal';row.locked=true;row.generatedBy='auto';row.optimizationVersion=version;}}); return next; }); setSmartState(p=>({...p,isOpen:false})); showAlert('完成',`已接受 ${selected.length} 項智慧代課建議；其餘課節保持不變。`); };
+  const unlockLog = id => {setLogs(prev=>prev.map(l=>l.id===id?{...l,locked:false}:l));setActiveCell(prev=>prev?.logId===id?{...prev,locked:false}:prev);};
+  const lockLog = id => setLogs(prev=>prev.map(l=>l.id===id?{...l,locked:true}:l));
+  const setSState = state => { if(!activeCell)return; if(activeCell.locked)return showAlert('已鎖定','請先解鎖。'); const x=state==='cancel'?{subId:'CANCELLED',subName:'S班取消',assignmentType:'cancelled'}:{subId:'MAINSTREAM_RETURN',subName:'S班返回大班上課',assignmentType:'return_mainstream'}; setLogs(prev=>prev.map(l=>l.id===activeCell.logId?{...l,...x,locked:true}:l)); setActiveCell(prev=>({...prev,...x,locked:true})); };
+  const assignmentText = l => l?.subId==='CANCELLED'?'S班取消':l?.subId==='MAINSTREAM_RETURN'?'S班返回大班上課':l?.subName||'需要代課';
+
+  const renderSmartModal = () => { if(!smartState.isOpen)return null; const ds=dailyLogs(), ss=smartState.suggestions||[]; return <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/50"><div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] overflow-hidden flex flex-col"><div className="p-4 border-b bg-fuchsia-50 flex justify-between"><div><h3 className="font-bold text-lg text-purple-900 flex items-center"><Sparkles size={18} className="mr-2"/>智慧代課</h3><p className="text-xs text-gray-500">選課 → 選邏輯 → 一鍵生成 → 接受／部分接受／拒絕</p></div><button onClick={()=>setSmartState(p=>({...p,isOpen:false}))}><X/></button></div><div className="p-4 overflow-auto flex-1"><div className="flex gap-3 mb-4"><label className="border rounded-lg p-2"><input type="radio" checked={smartState.mode==='priority'} onChange={()=>setSmartState(p=>({...p,mode:'priority',generated:false}))}/> Priority</label><label className="border rounded-lg p-2"><input type="radio" checked={smartState.mode==='score'} onChange={()=>setSmartState(p=>({...p,mode:'score',generated:false}))}/> 評分＋原因</label><button className="px-3 border rounded-lg" onClick={()=>setSmartState(p=>({...p,selectedLogIds:ds.filter(changeable).map(l=>l.id)}))}>全選</button></div><div className="border rounded-xl mb-4">{ds.map(l=><label key={l.id} className="flex items-center gap-3 p-3 border-b last:border-0"><input type="checkbox" disabled={!changeable(l)} checked={smartState.selectedLogIds.includes(l.id)} onChange={()=>setSmartState(p=>({...p,selectedLogIds:p.selectedLogIds.includes(l.id)?p.selectedLogIds.filter(x=>x!==l.id):[...p.selectedLogIds,l.id],generated:false}))}/><span className="w-14 font-bold">第{l.period}節</span><span className="w-24">{l.absentName}</span><span className="w-20">{l.className||'-'}</span><span className="flex-1 text-gray-500">{l.subject||'-'}</span><span className="text-xs">{l.locked?'🔒 已鎖定':l.subId?'已安排':'待安排'}</span></label>)}</div>{!smartState.generated?<div className="text-right"><button onClick={generateSmartPlan} className="px-5 py-2 bg-purple-600 text-white rounded-lg"><Sparkles size={15} className="inline mr-1"/>一鍵生成</button></div>:<><div className="font-bold mb-2">智慧建議（{smartState.mode==='priority'?'Priority':'評分＋原因'}）</div><div className="space-y-2">{ss.map((x,i)=><div key={x.id} className="p-3 border rounded-lg bg-gray-50"><div className="font-bold">{i+1}. 第{x.target.period}節 {x.target.absentName} {x.target.className||''}</div><div className="text-sm">原安排：{x.oldTeacher||'未安排'} → <b>{x.newTeacher||'無法安排'}</b></div><div className="text-xs text-purple-700 mt-1">{x.reason}</div>{x.status==='suggested'&&<div className="text-xs mt-1">{smartState.mode==='priority'?`Priority ${x.priority}`:`${x.score} 分`}</div>}</div>)}</div><div className="flex justify-end gap-2 mt-5"><button onClick={()=>setSmartState(p=>({...p,isOpen:false}))} className="px-4 py-2 border rounded-lg">拒絕</button><button onClick={()=>applySmart(ss.filter(x=>x.status==='suggested').map(x=>x.id))} className="px-4 py-2 bg-green-600 text-white rounded-lg">全部接受</button><button onClick={()=>{const n=window.prompt('輸入要接受的編號，例如 1,3,4');if(!n)return;applySmart(n.split(',').map(v=>ss[Number(v.trim())-1]?.id).filter(Boolean));}} className="px-4 py-2 bg-purple-600 text-white rounded-lg">部分接受</button></div></>}</div></div></div>; };
 
   const renderModal = () => {
     if (!modal.isOpen) return null;
@@ -986,13 +1144,14 @@ export default function SubstitutionApp() {
             <div className="flex flex-col h-full overflow-hidden">
               <div className="bg-purple-50 p-3 rounded-lg mb-4 text-sm shadow-sm border border-purple-100 shrink-0">
                 <p><strong>缺席:</strong> {activeCell.absentName} ({activeCell.reason})</p><p><strong>節次:</strong> 第 {activeCell.period} 節</p>
-                <div className="flex items-center mt-2"><strong className="mr-2">班別:</strong><input type="text" value={activeCell.className || ''} onChange={(e) => { const val = e.target.value; setActiveCell(prev => ({...prev, className: val})); setLogs(prev => (Array.isArray(prev)?prev:[]).map(l => l.id === activeCell.logId ? {...l, className: val} : l)); }} className="border p-1 rounded w-20 text-xs outline-none focus:border-purple-400 bg-white" /></div>
+                <div className="flex items-center mt-2"><strong className="mr-2">班別:</strong><input type="text" value={activeCell.className || ''} onChange={(e) => { if (activeCell.locked) return; const val = e.target.value; setActiveCell(prev => ({...prev, className: val})); setLogs(prev => (Array.isArray(prev)?prev:[]).map(l => l.id === activeCell.logId ? {...l, className: val} : l)); }} className="border p-1 rounded w-20 text-xs outline-none focus:border-purple-400 bg-white" /></div>
                 {activeCell.subId && activeCell.subId !== 'CANCELLED' && ( <div className="mt-3 p-2 bg-green-100 text-green-800 rounded flex justify-between items-center border border-green-200"><div>已指派: <strong>{activeCell.subName}</strong><br/><span className="text-[10px] text-green-600 font-bold">{activeCell.note}</span></div><button onClick={handleRemoveSub} className="text-xs bg-white text-red-500 px-2 py-1 rounded shadow-sm hover:bg-red-50 border border-red-100 shrink-0">移除代課</button></div> )}
-                {activeCell.subId === 'CANCELLED' && ( <div className="mt-3 p-2 bg-gray-200 text-gray-600 rounded flex justify-between items-center border border-gray-300"><span>狀態: <strong>自動取消</strong></span><button onClick={handleRemoveSub} className="text-xs bg-white text-purple-600 px-2 py-1 rounded shadow-sm hover:bg-purple-50 border border-purple-200">還原代課</button></div> )}
+                {(activeCell.subId === 'CANCELLED' || activeCell.subId === 'MAINSTREAM_RETURN') && ( <div className="mt-3 p-2 bg-gray-100 text-gray-700 rounded border">狀態：<strong>{activeCell.subId === 'CANCELLED' ? 'S班取消' : 'S班返回大班上課'}</strong></div> )}
+                 <div className="mt-2 flex gap-2 flex-wrap">{activeCell.locked ? <button onClick={()=>unlockLog(activeCell.logId)} className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700"><Unlock size={12} className="inline mr-1"/>解鎖後修改</button> : <button onClick={()=>lockLog(activeCell.logId)} className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700"><Lock size={12} className="inline mr-1"/>鎖定本節</button>}{activeCell.isSClass&&!activeCell.locked&&<><button onClick={()=>setSState('cancel')} className="text-xs px-2 py-1 border rounded">S班取消</button><button onClick={()=>setSState('main')} className="text-xs px-2 py-1 border rounded text-blue-700">S班返回大班</button></>}</div>
                 <div className="mt-3 pt-3 border-t border-purple-200 text-right"><button onClick={handleDeleteLog} className="text-xs text-red-500 hover:underline flex items-center justify-end w-full"><Trash2 size={12} className="mr-1"/> 刪除此節缺課紀錄</button></div>
               </div>
               <div className="flex-1 overflow-y-auto pr-1 space-y-4">
-                 {activeCell.subId !== 'CANCELLED' ? ( 
+                 {!activeCell.subId || activeCell.subId === 'MAINSTREAM_RETURN' ? ( 
                    <>
                      <div>
                        <div className="text-xs text-purple-700 mb-2 font-bold flex justify-between"><span>推薦代課名單</span></div>
@@ -1099,11 +1258,11 @@ export default function SubstitutionApp() {
                           const log = dailyLogs.find(l => String(l.absentId) === String(c.id) && l.period === p);
                           const isActive = activeCell?.logId === log?.id;
                           if (!log) return <td key={c.id} className="p-1 border-b border-gray-200 bg-gray-50 text-gray-300">-</td>;
-                          const isCancelled = log.subId === 'CANCELLED';
+                          const isCancelled = log.subId === 'CANCELLED' || log.subId === 'MAINSTREAM_RETURN';
                           return (
                             <td key={c.id} onClick={() => setActiveCell({...log, logId: log.id})} className={`p-1 border-b cursor-pointer transition-all ${isActive ? 'bg-purple-100 ring-2 ring-inset ring-purple-500' : isCancelled ? 'bg-gray-100 border-x border-gray-200' : !log.subId ? 'bg-red-50 hover:bg-red-100 border-x border-red-100' : 'bg-green-50 hover:bg-green-100 border-x border-green-100'}`}>
-                              {isCancelled ? ( <div className="text-gray-500 font-bold text-xs">S班取消</div> ) : !log.subId ? ( <div className="text-red-500 font-bold text-xs drop-shadow-sm">需要代課</div> ) : ( <div><div className="text-green-700 font-bold text-sm">{log.subName}</div>{log.note && <div className="text-[9px] text-orange-600 font-bold mt-0.5 leading-tight">{log.note}</div>}</div> )}
-                              <div className="text-[10px] text-gray-500">{log.className || '(未輸入)'}</div>
+                              {isCancelled ? ( <div className={`font-bold text-xs ${log.subId === 'MAINSTREAM_RETURN' ? 'text-blue-600' : 'text-gray-500'}`}>{log.subId === 'MAINSTREAM_RETURN' ? 'S班返回大班' : 'S班取消'}</div> ) : !log.subId ? ( <div className="text-red-500 font-bold text-xs drop-shadow-sm">需要代課</div> ) : ( <div><div className="text-green-700 font-bold text-sm">{log.subName}</div>{log.note && <div className="text-[9px] text-orange-600 font-bold mt-0.5 leading-tight">{log.note}</div>}</div> )}
+                              {log.locked && <div className="text-[9px] text-gray-500">🔒 已鎖定</div>}<div className="text-[10px] text-gray-500">{log.className || '(未輸入)'}</div>
                             </td>
                           );
                        })}
@@ -1167,8 +1326,9 @@ export default function SubstitutionApp() {
     const statsData = getSortedTeachers(teachers).map(t => {
       if(!t) return null;
       const monthAbs = monthLogs.filter(l => String(l?.absentId) === String(t.id) && l.isCountedAbsence).length;
-      const monthSubs = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.subId !== 'CANCELLED' && !l?.isSwap).length;
-      return { ...t, monthAbs, monthSubs };
+      const monthSubs = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.subId !== 'CANCELLED' && l?.subId !== 'MAINSTREAM_RETURN' && !l?.isSwap && l?.assignmentType !== 'transfer').length;
+      const monthTransfers = monthLogs.filter(l => String(l?.subId) === String(t.id) && l?.assignmentType === 'transfer' && !l?.superseded).length;
+       return { ...t, monthAbs, monthSubs, monthTransfers };
     }).filter(Boolean);
     return (
       <div className="space-y-6 animate-in fade-in zoom-in duration-300 h-full overflow-auto">
@@ -1184,11 +1344,11 @@ export default function SubstitutionApp() {
           </div>
           <div className="overflow-hidden rounded-xl border border-purple-100">
             <table className="w-full text-sm bg-white">
-              <thead className="bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white"><tr><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-center">{statsMonth} 缺課</th><th className="p-3 text-center">{statsMonth} 代課</th><th className="p-3 text-center">淨值</th></tr></thead>
+              <thead className="bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white"><tr><th className="p-3 text-left w-20">職銜</th><th className="p-3 text-left">姓名</th><th className="p-3 text-center">{statsMonth} 缺課</th><th className="p-3 text-center">{statsMonth} 代課</th><th className="p-3 text-center">{statsMonth} 調堂</th><th className="p-3 text-center">淨值</th></tr></thead>
               <tbody className="divide-y divide-purple-50">{statsData.map(t => (
                 <tr key={t?.id || Math.random()} className="hover:bg-purple-50">
                 <td className="p-3 text-gray-500 text-xs">{t?.title || '-'}</td><td className="p-3 font-medium">{t?.name || '未知'}</td>
-                <td className="p-3 text-center text-red-500 font-bold">{t?.monthAbs || 0}</td><td className="p-3 text-center text-purple-600 font-bold">{t?.monthSubs || 0}</td>
+                <td className="p-3 text-center text-red-500 font-bold">{t?.monthAbs || 0}</td><td className="p-3 text-center text-purple-600 font-bold">{t?.monthSubs || 0}</td><td className="p-3 text-center text-blue-600 font-bold">{t?.monthTransfers || 0}</td>
                 <td className={`p-3 text-center font-bold ${(t?.monthSubs || 0) - (t?.monthAbs || 0) > 0 ? 'text-green-600' : (t?.monthSubs || 0) - (t?.monthAbs || 0) < 0 ? 'text-orange-500' : 'text-gray-400'}`}>{(t?.monthSubs || 0) - (t?.monthAbs || 0) > 0 ? '+' : ''}{(t?.monthSubs || 0) - (t?.monthAbs || 0)}</td>
                 </tr>
               ))}</tbody>
@@ -1271,7 +1431,7 @@ export default function SubstitutionApp() {
                                             const log = dailyLogs.find(l => String(l.absentId) === String(c.id) && l.period === period);
                                             return (
                                                 <td key={`${c.id}-${period}`} className={`p-1 border-b ${!log || log.subId === 'CANCELLED' ? 'bg-gray-50' : ''}`}>
-                                                    {log ? (log.subId === 'CANCELLED' ? <span className="text-gray-400 text-xs">S班取消</span> : log.subName || <span className="text-red-500 text-xs">未安排</span>) : ''}
+                                                    {log ? (log.subId === 'CANCELLED' ? <span className="text-gray-400 text-xs">S班取消</span> : (log.subId === 'MAINSTREAM_RETURN' ? <span className="text-blue-500 text-xs">S班返回大班</span> : log.subName) || <span className="text-red-500 text-xs">未安排</span>) : ''}
                                                 </td>
                                             );
                                         }
@@ -1325,7 +1485,7 @@ const generateHtmlForReport = () => {
   dailyLogs.forEach(log => {
     if (log?.absentId && rowsData[`L${log.period}`]) {
         const absentIdStr = String(log.absentId);
-        const subText = log.subId === 'CANCELLED' ? 'S班取消' : (log.subName || '未安排');
+        const subText = log.subId === 'CANCELLED' ? 'S班取消' : (log.subId === 'MAINSTREAM_RETURN' ? 'S班返回大班上課' : (log.subName || '未安排'));
         
         // 1. 處理備註格式：防止系統重複加括號 (例如原本已經有 (私下調堂))
         const noteText = log.note ? (log.note.startsWith('(') ? ` ${log.note}` : ` (${log.note})`) : '';
@@ -1422,12 +1582,13 @@ const generateHtmlForReport = () => {
   };
 
   // 載入/重置最新日誌資料
-  const handleResetManualHtml = () => {
-    const container = document.getElementById('manual-page-capture-inner');
-    if (container) {
-      container.innerHTML = generateHtmlForReport();
-      showAlert("提示", "已重置並載入最新的日誌資料！");
-    }
+  const handleResetManualHtml = async () => {
+    const html = generateHtmlForReport();
+    setManualHtml(html);
+    localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, html);
+    if (manualEditorRef.current) manualEditorRef.current.innerHTML = html;
+    await saveManualHtmlToCloud(false);
+    showAlert('提示', '已重新載入最新日誌資料，並儲存到自由編輯區雲端。');
   };
 
   // 渲染「手動」頁面
@@ -1437,18 +1598,18 @@ const generateHtmlForReport = () => {
             <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <h2 className="text-xl font-bold text-purple-800 flex items-center"><FileText className="mr-2"/> 手動代課日誌</h2>
-                  <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded border border-amber-200">獨立自由編輯區 (不連雲端資料)</span>
+                  <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded border border-blue-200">獨立自由編輯區 · 雲端額外儲存</span>
+                  <span className="text-xs text-gray-500">{manualCloudStatus === 'saving' ? '☁️ 儲存中...' : manualCloudStatus === 'pending' ? '⚠️ 尚有未同步修改' : manualCloudStatus === 'saved' ? `☁️ 已同步${manualLastSaved ? ` ${manualLastSaved.toLocaleTimeString()}` : ''}` : manualCloudStatus === 'error' ? '❌ 雲端儲存失敗（已保留本機）' : manualCloudStatus === 'local' ? '💾 本機暫存' : ''}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <button onClick={handleResetManualHtml} className="bg-gray-100 text-gray-700 hover:bg-gray-200 px-3 py-1.5 rounded-lg shadow-sm text-sm flex items-center border border-gray-300 font-normal"><RefreshCw size={14} className="mr-1"/> 載入/重置日誌</button>
+                  <button onClick={() => saveManualHtmlToCloud(true)} className="bg-purple-600 text-white hover:bg-purple-700 px-3 py-1.5 rounded-lg shadow-sm text-sm flex items-center font-normal"><Cloud size={14} className="mr-1"/> 儲存到雲端</button>
                   <button onClick={() => downloadImage('manual-page-capture-inner', `代課日誌_手動修改_${formDate}.png`)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-emerald-700 flex items-center font-normal"><ImageIcon size={14} className="mr-1"/> 下載圖片</button>
                   <button onClick={downloadManualHtmlReport} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center font-normal"><Download size={14} className="mr-1"/> 下載 HTML</button>
                 </div>
             </div>
-            <p className="text-xs text-gray-500 mb-2">💡 提示：你可以直接點擊下方表格內任何文字自由增刪修改。此處修改不會覆蓋系統或雲端資料。</p>
-            <div id="manual-page-capture-inner" contentEditable suppressContentEditableWarning className="flex-1 border-2 border-dashed border-purple-200 rounded-lg p-4 overflow-auto bg-white focus:outline-none focus:border-purple-500">
-                <div dangerouslySetInnerHTML={{ __html: manualHtml || generateHtmlForReport() }} />
-            </div>
+            <p className="text-xs text-gray-500 mb-2">💡 提示：你可以直接點擊下方表格內任何文字自由增刪修改。內容會依日期獨立儲存在 Firebase，不會覆蓋正式代課或雲端主資料；停止輸入約 1.2 秒會自動同步。</p>
+            <div id="manual-page-capture-inner" ref={manualEditorRef} contentEditable suppressContentEditableWarning onInput={handleManualEditorInput} className="flex-1 border-2 border-dashed border-purple-200 rounded-lg p-4 overflow-auto bg-white focus:outline-none focus:border-purple-500" dangerouslySetInnerHTML={{ __html: manualHtml || generateHtmlForReport() }} />
         </div>
     );
   };
@@ -1458,7 +1619,8 @@ const generateHtmlForReport = () => {
 
   return (
     <div className="h-screen bg-fuchsia-50 font-sans text-gray-800 selection:bg-fuchsia-200 overflow-hidden flex flex-col">
-      {renderModal()}
+      {renderSmartModal()}
+       {renderModal()}
       {renderSwapModal()}
       {renderReplaceModal()}
       {renderAssignModal()} 
@@ -1466,14 +1628,14 @@ const generateHtmlForReport = () => {
         <div className="max-w-[1850px] mx-auto px-4 py-2 flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 8.9</div>
+               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 9.0</div>
                {isCloudEnabled ? 
                  <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                  : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
                }
             </div>
             <div className="flex space-x-1">
-              {[{id:'arrange',label:'安排',icon:Search}, {id:'advanced',label:'進階',icon:ClipboardEdit}, {id:'report',label:'日誌',icon:Clock}, {id:'manual',label:'手動',icon:FileText}, {id:'stats',label:'統計',icon:BarChart3}, {id:'teachers',label:'設定',icon:Users}].map(t=>(
+              {[{id:'arrange',label:'安排',icon:Search}, {id:'smart',label:'智慧代課',icon:Sparkles}, {id:'advanced',label:'進階',icon:ClipboardEdit}, {id:'report',label:'日誌',icon:Clock}, {id:'manual',label:'手動',icon:FileText}, {id:'stats',label:'統計',icon:BarChart3}, {id:'teachers',label:'設定',icon:Users}].map(t=>(
                 <button key={t.id} onClick={()=> setCurrentView(t.id)} className={`px-3 py-1.5 rounded-lg flex items-center text-sm transition-all duration-200 ${currentView===t.id?'bg-white/20 shadow-inner font-bold':'hover:bg-white/10 text-purple-100'}`}><t.icon size={14} className="mr-1.5"/>{t.label}</button>
               ))}
             </div>
@@ -1505,6 +1667,7 @@ const generateHtmlForReport = () => {
       </nav>
       <main className="max-w-[1850px] mx-auto w-full p-4 flex-1 overflow-hidden">
         {currentView==='arrange' && renderArrangeView()}
+         {currentView==='smart' && <div className="bg-white p-6 rounded-2xl shadow-xl h-full overflow-auto"><h2 className="text-xl font-bold text-purple-800 mb-4 flex items-center"><Sparkles className="mr-2"/>智慧代課 V9.0</h2><p className="text-sm text-gray-600 mb-4">今日缺席老師達 3 人時系統會主動提示；亦可隨時手動開啟智慧規劃。</p><button onClick={openSmartScheduler} className="px-4 py-2 bg-purple-600 text-white rounded-lg">開始智慧規劃</button></div>}
         {currentView==='teachers' && renderTeachersView()}
         {currentView==='stats' && renderStatsView()}
         {currentView === 'advanced' && renderAdvancedView()}
