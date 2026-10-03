@@ -1,4 +1,4 @@
-// Version 9.0 - 智慧代課系統
+// Version 9.1 - 智慧代課系統：逐格人工修改雲端保存
 import React, { useState, useEffect, useRef } from 'react';
 import { Users, Calendar, BarChart3, Clock, Plus, Trash2, UserCheck, Search, X, AlertCircle, CheckCircle, Upload, Download, FileText, Star, Cloud, CloudOff, Loader2, Save, RefreshCw, Image as ImageIcon, ArrowLeft, ArrowRight, ChevronsLeft, ChevronsRight, ClipboardEdit, Sparkles, Lock, Unlock, CheckCheck } from 'lucide-react';
 import { doc, getDoc, setDoc } from "firebase/firestore";
@@ -53,6 +53,8 @@ export default function SubstitutionApp() {
   const manualSaveTimerRef = useRef(null);
   const [manualCloudStatus, setManualCloudStatus] = useState('idle');
   const [manualLastSaved, setManualLastSaved] = useState(null);
+  // V9.1：逐格人工修改層。人工修改優先於系統重新生成的日誌。
+  const [manualOverrides, setManualOverrides] = useState({});
 
   const [newAbsentId, setNewAbsentId] = useState('');
   const [newAbsentReason, setNewAbsentReason] = useState('病假');
@@ -147,6 +149,92 @@ export default function SubstitutionApp() {
     setConfirmState({});
   }, [formDate]);
 
+  // V9.1：每個表格方格使用「列ID__缺席老師ID」作為穩定鍵，避免新增缺席老師後舊資料消失。
+  const getManualCellKey = (rowId, absentId) => `${String(rowId)}__${String(absentId)}`;
+
+  const getManualOverrideValue = (rowId, absentId) => {
+    const key = getManualCellKey(rowId, absentId);
+    return Object.prototype.hasOwnProperty.call(manualOverrides || {}, key)
+      ? manualOverrides[key]?.value ?? ''
+      : null;
+  };
+
+  const loadManualOverrides = async (dateKey) => {
+    let loaded = null;
+    try {
+      if (dbRef.current && isCloudEnabled) {
+        const snap = await getDoc(doc(dbRef.current, 'manual_overrides', dateKey));
+        if (snap.exists()) loaded = snap.data()?.cells || {};
+      }
+    } catch (e) {
+      console.warn('逐格人工修改雲端讀取失敗', e);
+    }
+    if (!loaded) {
+      try {
+        const local = localStorage.getItem(`substitution_system_manual_overrides_v9_1_${dateKey}`);
+        loaded = local ? (JSON.parse(local) || {}) : {};
+      } catch (e) { loaded = {}; }
+    }
+    setManualOverrides(loaded || {});
+    return loaded || {};
+  };
+
+  const saveManualOverrides = async (cells, showMessage = false) => {
+    const safeCells = cells || {};
+    localStorage.setItem(`substitution_system_manual_overrides_v9_1_${formDate}`, JSON.stringify(safeCells));
+    setManualOverrides(safeCells);
+    if (!dbRef.current || !isCloudEnabled) {
+      if (showMessage) showAlert('提示', '目前未連接 Firebase，逐格修改已先保存在本機。');
+      return;
+    }
+    try {
+      const now = new Date();
+      await setDoc(doc(dbRef.current, 'manual_overrides', formDate), {
+        date: formDate,
+        cells: safeCells,
+        updatedAt: now.toISOString(),
+        version: 91
+      }, { merge: true });
+      if (showMessage) showAlert('成功', `${formDate} 的逐格人工修改已同步到雲端。`);
+    } catch (e) {
+      console.error('逐格人工修改雲端儲存失敗', e);
+      if (showMessage) showAlert('錯誤', '逐格人工修改雲端儲存失敗，內容仍保留在本機。');
+    }
+  };
+
+  const recordManualCellEdit = (cellEl) => {
+    if (!cellEl) return;
+    const key = cellEl.getAttribute('data-manual-key');
+    if (!key) return;
+    const value = cellEl.innerHTML;
+    const original = cellEl.getAttribute('data-system-html') || '';
+    setManualOverrides(prev => {
+      const next = { ...(prev || {}) };
+      if (value === original) delete next[key];
+      else next[key] = { value, original, updatedAt: new Date().toISOString(), source: 'manual' };
+      localStorage.setItem(`substitution_system_manual_overrides_v9_1_${formDate}`, JSON.stringify(next));
+      if (manualSaveTimerRef.current) clearTimeout(manualSaveTimerRef.current);
+      manualSaveTimerRef.current = setTimeout(() => saveManualOverrides(next, false), 700);
+      return next;
+    });
+  };
+
+  const applyManualOverridesToHtml = (html, overrides = manualOverrides) => {
+    if (!html || !overrides || Object.keys(overrides).length === 0) return html;
+    try {
+      const parser = new DOMParser();
+      const docHtml = parser.parseFromString(html, 'text/html');
+      Object.entries(overrides).forEach(([key, item]) => {
+        const target = docHtml.querySelector(`[data-manual-key="${CSS.escape(key)}"]`);
+        if (target && item && typeof item.value === 'string') target.innerHTML = item.value;
+      });
+      return docHtml.documentElement.outerHTML;
+    } catch (e) {
+      console.warn('套用逐格人工修改失敗', e);
+      return html;
+    }
+  };
+
   // V9.0：獨立自由編輯區使用獨立 Firebase 文件，以日期分開儲存。
   // 不寫入 main_backup_v3，因此不會影響正式代課、日誌及統計。
   useEffect(() => {
@@ -157,8 +245,10 @@ export default function SubstitutionApp() {
         if (dbRef.current && isCloudEnabled) {
           const snap = await getDoc(doc(dbRef.current, 'manual_editor', formDate));
           if (!cancelled && snap.exists()) {
-            const html = snap.data()?.html || '';
-            setManualHtml(html);
+            const overrides = await loadManualOverrides(formDate);
+            const baseHtml = generateHtmlForReport();
+            const mergedHtml = applyManualOverridesToHtml(baseHtml, overrides);
+            setManualHtml(mergedHtml);
             setManualLastSaved(snap.data()?.updatedAt ? new Date(snap.data().updatedAt) : null);
             setManualCloudStatus('saved');
             return;
@@ -170,9 +260,12 @@ export default function SubstitutionApp() {
 
       // 沒有雲端內容時保留本機日期備份，避免切換日期後內容消失。
       const local = localStorage.getItem(STORAGE_KEY_MANUAL_PREFIX + formDate);
+      const overrides = await loadManualOverrides(formDate);
       if (!cancelled) {
-        setManualHtml(local || '');
-        setManualCloudStatus(local ? 'local' : 'idle');
+        const baseHtml = generateHtmlForReport();
+        const mergedHtml = applyManualOverridesToHtml(baseHtml, overrides);
+        setManualHtml(mergedHtml || local || '');
+        setManualCloudStatus((mergedHtml || local) ? 'local' : 'idle');
         setManualLastSaved(null);
       }
     };
@@ -215,7 +308,9 @@ export default function SubstitutionApp() {
     }
   };
 
-  const handleManualEditorInput = () => {
+  const handleManualEditorInput = (e) => {
+    const cell = e?.target?.closest?.('[data-manual-key]');
+    if (cell) recordManualCellEdit(cell);
     const html = getManualEditorHtml();
     setManualHtml(html);
     localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, html);
@@ -1429,9 +1524,12 @@ export default function SubstitutionApp() {
                                     {absentCols.map(c => {
                                         if (isLesson) {
                                             const log = dailyLogs.find(l => String(l.absentId) === String(c.id) && l.period === period);
+                                            const cellKey = getManualCellKey(`L${period}`, c.id);
+                                            const override = getManualOverrideValue(`L${period}`, c.id);
+                                            const systemText = log ? (log.subId === 'CANCELLED' ? 'S班取消' : (log.subId === 'MAINSTREAM_RETURN' ? 'S班返回大班上課' : (log.subName || '未安排'))) : '';
                                             return (
                                                 <td key={`${c.id}-${period}`} className={`p-1 border-b ${!log || log.subId === 'CANCELLED' ? 'bg-gray-50' : ''}`}>
-                                                    {log ? (log.subId === 'CANCELLED' ? <span className="text-gray-400 text-xs">S班取消</span> : (log.subId === 'MAINSTREAM_RETURN' ? <span className="text-blue-500 text-xs">S班返回大班</span> : log.subName) || <span className="text-red-500 text-xs">未安排</span>) : ''}
+                                                    {override !== null ? <span className="font-semibold text-purple-700">{override.replace(/<[^>]*>/g, '')}</span> : (log ? (log.subId === 'CANCELLED' ? <span className="text-gray-400 text-xs">S班取消</span> : (log.subId === 'MAINSTREAM_RETURN' ? <span className="text-blue-500 text-xs">S班返回大班</span> : log.subName) || <span className="text-red-500 text-xs">未安排</span>) : '')}
                                                 </td>
                                             );
                                         }
@@ -1439,7 +1537,7 @@ export default function SubstitutionApp() {
                                             <td key={`${c.id}-${dutyId}`} className="p-0 border-b">
                                                 <input
                                                     type="text"
-                                                    value={(dateDuties[dutyId] && dateDuties[dutyId][c.id]) || ''}
+                                                    value={getManualOverrideValue(dutyId, c.id) !== null ? getManualOverrideValue(dutyId, c.id).replace(/<[^>]*>/g, '') : ((dateDuties[dutyId] && dateDuties[dutyId][c.id]) || '')}
                                                     onChange={(e) => handleDutyChange(dutyId, c.id, e.target.value)}
                                                     className="w-full h-full p-1 text-center bg-transparent border-none outline-none focus:bg-yellow-100"
                                                 />
@@ -1524,7 +1622,10 @@ const generateHtmlForReport = () => {
       let cells = '';
       absentCols.forEach(col => {
           const content = (rowsData[row.id] && rowsData[row.id][col.id]) || '';
-          cells += `<td style="width:109pt;border:1pt solid black;padding:4pt;">${content}</td>`;
+          const key = getManualCellKey(row.id, col.id);
+          const override = getManualOverrideValue(row.id, col.id);
+          const effectiveContent = override !== null ? override : content;
+          cells += `<td data-manual-key="${key}" data-system-html="${String(content).replace(/&/g,'&amp;').replace(/\"/g,'&quot;')}" style="width:109pt;border:1pt solid black;padding:4pt;">${effectiveContent}</td>`;
       });
       bodyRows += `<tr style="height:23pt"><td style="border:1pt solid black;padding:4pt;"><p class="s3">${row.time}</p></td><td style="border:1pt solid black;padding:4pt;"><p class="s5">${row.label}</p></td>${cells}</tr>`;
   });
@@ -1583,12 +1684,13 @@ const generateHtmlForReport = () => {
 
   // 載入/重置最新日誌資料
   const handleResetManualHtml = async () => {
-    const html = generateHtmlForReport();
+    const overrides = await loadManualOverrides(formDate);
+    const html = applyManualOverridesToHtml(generateHtmlForReport(), overrides);
     setManualHtml(html);
     localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, html);
     if (manualEditorRef.current) manualEditorRef.current.innerHTML = html;
     await saveManualHtmlToCloud(false);
-    showAlert('提示', '已重新載入最新日誌資料，並儲存到自由編輯區雲端。');
+    showAlert('提示', '已重新載入最新日誌資料；所有已保存的人工逐格修改已重新套用。');
   };
 
   // 渲染「手動」頁面
@@ -1608,7 +1710,7 @@ const generateHtmlForReport = () => {
                   <button onClick={downloadManualHtmlReport} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow text-sm hover:bg-blue-700 flex items-center font-normal"><Download size={14} className="mr-1"/> 下載 HTML</button>
                 </div>
             </div>
-            <p className="text-xs text-gray-500 mb-2">💡 提示：你可以直接點擊下方表格內任何文字自由增刪修改。內容會依日期獨立儲存在 Firebase，不會覆蓋正式代課或雲端主資料；停止輸入約 1.2 秒會自動同步。</p>
+            <p className="text-xs text-gray-500 mb-2">💡 提示：你可以直接點擊下方表格內任何文字自由增刪修改。內容會依日期獨立儲存在 Firebase；表格每一格的人工修改會另外保存為逐格覆寫資料。日後新增請假、重新載入或智慧重排時，已確認的人工修改會優先保留；停止輸入約 1.2 秒會自動同步。</p>
             <div id="manual-page-capture-inner" ref={manualEditorRef} contentEditable suppressContentEditableWarning onInput={handleManualEditorInput} className="flex-1 border-2 border-dashed border-purple-200 rounded-lg p-4 overflow-auto bg-white focus:outline-none focus:border-purple-500" dangerouslySetInnerHTML={{ __html: manualHtml || generateHtmlForReport() }} />
         </div>
     );
@@ -1628,7 +1730,7 @@ const generateHtmlForReport = () => {
         <div className="max-w-[1850px] mx-auto px-4 py-2 flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 9.0</div>
+               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 9.1</div>
                {isCloudEnabled ? 
                  <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                  : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
