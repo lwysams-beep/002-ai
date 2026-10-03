@@ -55,7 +55,7 @@ export default function SubstitutionApp() {
   const manualSaveTimerRef = useRef(null);
   const [manualCloudStatus, setManualCloudStatus] = useState('idle');
   const [manualLastSaved, setManualLastSaved] = useState(null);
-  // V9.2：逐格人工修改層。人工修改優先於系統重新生成的日誌。
+  // V9.0a：逐格人工修改層。人工修改優先於系統重新生成的日誌。
   const [manualOverrides, setManualOverrides] = useState({});
 
   const [newAbsentId, setNewAbsentId] = useState('');
@@ -151,7 +151,7 @@ export default function SubstitutionApp() {
     setConfirmState({});
   }, [formDate]);
 
-  // V9.2：每個表格方格使用「列ID__缺席老師ID」作為穩定鍵，避免新增缺席老師後舊資料消失。
+  // V9.0a：每個表格方格使用「列ID__缺席老師ID」作為穩定鍵，避免新增缺席老師後舊資料消失。
   const getManualCellKey = (rowId, absentId) => `${String(rowId)}__${String(absentId)}`;
 
   const getManualOverrideValue = (rowId, absentId) => {
@@ -275,7 +275,7 @@ export default function SubstitutionApp() {
     return () => { cancelled = true; };
   }, [formDate, isCloudEnabled, isLoading]);
 
-  // V9.2：正式資料（例如突然新增缺席老師）變動後，重新建立手動頁，
+  // V9.0a：正式資料（例如突然新增缺席老師）變動後，重新建立手動頁，
   // 但一定先套回已保存的逐格人工修改，因此不會因重新生成而清空人工內容。
   useEffect(() => {
     if (isLoading) return;
@@ -286,7 +286,7 @@ export default function SubstitutionApp() {
     setManualHtml(mergedHtml);
     localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, mergedHtml);
     if (manualEditorRef.current) manualEditorRef.current.innerHTML = mergedHtml;
-  }, [logs, duties, absentColOrder, manualOverrides, formDate]);
+  }, [logs, duties, absentColOrder, formDate]);
 
   const getManualEditorHtml = () => {
     const container = manualEditorRef.current;
@@ -311,7 +311,7 @@ export default function SubstitutionApp() {
         date: formDate,
         html,
         updatedAt: now.toISOString(),
-        version: 9
+        version: '9.0a'
       }, { merge: true });
       setManualLastSaved(now);
       setManualCloudStatus('saved');
@@ -334,12 +334,17 @@ export default function SubstitutionApp() {
       cell = el?.closest?.('[data-manual-key]') || null;
     }
     if (cell) recordManualCellEdit(cell);
-    const html = getManualEditorHtml();
-    setManualHtml(html);
-    localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, html);
+    // V9.0a：輸入中的 DOM 必須保持原狀，不能每打一個字就用 React state 重新灌回 innerHTML，
+    // 否則游標會被瀏覽器移走，造成「每輸入一隻字便要重新點一下」的問題。
+    // 逐格內容仍會由 recordManualCellEdit 即時保存；整頁 HTML 則延遲同步。
     setManualCloudStatus('pending');
     if (manualSaveTimerRef.current) clearTimeout(manualSaveTimerRef.current);
-    manualSaveTimerRef.current = setTimeout(() => saveManualHtmlToCloud(false), 1200);
+    manualSaveTimerRef.current = setTimeout(() => {
+      const html = getManualEditorHtml();
+      setManualHtml(html);
+      localStorage.setItem(STORAGE_KEY_MANUAL_PREFIX + formDate, html);
+      saveManualHtmlToCloud(false);
+    }, 1200);
   };
 
   const handleManualEditorBlur = (e) => {
@@ -1728,7 +1733,7 @@ const generateHtmlForReport = () => {
             <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <h2 className="text-xl font-bold text-purple-800 flex items-center"><FileText className="mr-2"/> 手動代課日誌</h2>
-                  <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded border border-blue-200">獨立自由編輯區 · 雲端額外儲存 · 逐格人工鎖定 V9.2</span>
+                  <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded border border-blue-200">獨立自由編輯區 · 雲端額外儲存 · 逐格人工鎖定 V9.0a</span>
                   <span className="text-xs text-gray-500">{manualCloudStatus === 'saving' ? '☁️ 儲存中...' : manualCloudStatus === 'pending' ? '⚠️ 尚有未同步修改' : manualCloudStatus === 'saved' ? `☁️ 已同步${manualLastSaved ? ` ${manualLastSaved.toLocaleTimeString()}` : ''}` : manualCloudStatus === 'error' ? '❌ 雲端儲存失敗（已保留本機）' : manualCloudStatus === 'local' ? '💾 本機暫存' : ''}</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1758,7 +1763,7 @@ const generateHtmlForReport = () => {
         <div className="max-w-[1850px] mx-auto px-4 py-2 flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 9.2</div>
+               <div className="font-bold text-xl flex items-center tracking-wide mr-3"><Calendar className="mr-2"/> 智慧代課系統 9.0a</div>
                {isCloudEnabled ? 
                  <div className="flex items-center space-x-2 cursor-pointer" onClick={() => alert("目前連線狀態正常。")}><span className="text-[10px] bg-green-500/20 text-white px-2 py-0.5 rounded-full flex items-center border border-green-200/30"><Cloud size={10} className="mr-1"/> 雲端同步</span>{saveStatus === 'saving' && <span className="text-[10px] text-white/70 flex items-center"><Loader2 size={10} className="mr-1 animate-spin"/>儲存中...</span>}{saveStatus === 'error' && <span className="text-[10px] text-red-200 flex items-center bg-red-500/20 px-1 rounded"><AlertCircle size={10} className="mr-1"/>儲存失敗</span>}</div>
                  : <span className="text-[10px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full flex items-center border border-white/10" onClick={() => alert("目前為本機模式。")}><CloudOff size={10} className="mr-1"/> 本機模式</span>
